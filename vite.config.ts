@@ -10,7 +10,7 @@ export default defineConfig(
   mergeConfig(frontendConfig, {
     root: frontendRoot,
     build: {
-      outDir: resolve(frontendRoot, 'dist'),
+      outDir: resolve(__dirname, 'dist'),
       emptyOutDir: true,
     },
   })

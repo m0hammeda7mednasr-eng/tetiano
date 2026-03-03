@@ -2,14 +2,16 @@
   "name": "tetiano",
   "private": true,
   "workspaces": [
+    "backend",
     "frontend"
   ],
-  "devDependencies": {
-    "vite": "^5.0.8"
-  },
   "scripts": {
-    "build": "vite build",
-    "dev": "vite",
-    "preview": "vite preview"
+    "install:backend": "cd backend && npm install",
+    "install:frontend": "cd frontend && npm install",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build:backend": "cd backend && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "start:backend": "cd backend && npm start"
   }
 }
