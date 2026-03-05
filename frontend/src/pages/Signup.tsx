@@ -9,7 +9,7 @@ export default function Signup() {
   const [fullName, setFullName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const { signUp } = useAuthStore();
+  const { signUp, refreshProfile } = useAuthStore();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -19,7 +19,9 @@ export default function Signup() {
 
     try {
       await signUp(email, password, fullName);
-      navigate("/");
+      await refreshProfile();
+      const { user, isAdmin } = useAuthStore.getState();
+      navigate(user ? (isAdmin ? "/admin/dashboard" : "/") : "/login");
     } catch (err: any) {
       setError(err.message || "فشل إنشاء الحساب. حاول مرة أخرى.");
     } finally {
@@ -37,13 +39,10 @@ export default function Signup() {
           <h1 className="text-4xl font-black bg-gradient-to-r from-brand-600 to-brand-400 bg-clip-text text-transparent inline-block">
             Tetiano
           </h1>
-          <h2 className="mt-4 text-2xl font-bold text-gray-900">
-            إنشاء حساب جديد
-          </h2>
+          <h2 className="mt-4 text-2xl font-bold text-gray-900">إنشاء حساب جديد</h2>
           <p className="mt-2 text-sm text-gray-500 font-medium">
-            أول حساب في نظام جديد يُعيَّن أدمن تلقائيًا، وباقي الحسابات تكون
-            مستخدمين عاديين
-            ويمكن للأدمن تعديل الصلاحيات من لوحة التحكم.
+            أي حساب جديد عبر صفحة التسجيل يُعيَّن كـ أدمن تلقائيًا. حسابات الموظفين تُنشأ من
+            لوحة الأدمن، ويتم توجيههم مباشرة للداشبورد المرتبط بحسابهم.
           </p>
         </div>
 
@@ -150,7 +149,7 @@ export default function Signup() {
             <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-3">
               <p className="text-xs font-bold text-emerald-700 flex items-center gap-2">
                 <CheckCircle className="w-4 h-4" />
-                بعد تسجيل الدخول سيتم توجيهك تلقائيًا حسب صلاحيتك.
+                بعد التسجيل سيتم توجيهك تلقائيًا حسب صلاحيتك.
               </p>
             </div>
 

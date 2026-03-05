@@ -98,9 +98,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (error) throw error;
   },
 
-  // Signup is open; role assignment is handled by DB trigger policy.
+  // Signup is open. We enforce admin for self-signup accounts.
   signUp: async (email: string, password: string, full_name: string) => {
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -109,6 +109,31 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     });
 
     if (error) throw error;
+
+    const sessionUser = data.session?.user;
+    if (!sessionUser) {
+      return;
+    }
+
+    // Best-effort safety net in case DB trigger policy wasn't updated yet.
+    const { error: profileUpsertError } = await supabase
+      .from("user_profiles")
+      .upsert({
+        id: sessionUser.id,
+        full_name,
+        role: "admin",
+        is_active: true,
+        avatar_color: randomProfileColor(),
+      });
+
+    if (profileUpsertError) {
+      console.warn(
+        "Failed to enforce admin role for new signup",
+        profileUpsertError.message,
+      );
+    }
+
+    await fetchAndSetProfile(sessionUser, set);
   },
 
   signOut: async () => {
@@ -243,4 +268,17 @@ function normalizeTeam(teamValue: any) {
     return teamValue[0] || null;
   }
   return teamValue;
+}
+
+function randomProfileColor() {
+  const colors = [
+    "#6366f1",
+    "#8b5cf6",
+    "#ec4899",
+    "#f59e0b",
+    "#10b981",
+    "#3b82f6",
+  ];
+
+  return colors[Math.floor(Math.random() * colors.length)];
 }
