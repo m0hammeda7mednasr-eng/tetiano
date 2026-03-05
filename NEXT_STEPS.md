@@ -128,7 +128,8 @@ curl https://your-app.railway.app/health
 2. SQL Editor
 3. انسخ محتوى QUICK_DATABASE_SETUP.sql
 4. شغله
-5. تحقق من النتائج
+5. شغّل أيضًا migration رقم 012 (restore signup role policy) إن كانت موجودة
+6. تحقق من النتائج
 ```
 
 ---
@@ -137,9 +138,10 @@ curl https://your-app.railway.app/health
 
 ```
 1. افتح https://tetiano.vercel.app
-2. سجل حساب جديد (سيكون Admin)
-3. سجل الدخول
-4. تحقق من:
+2. سجل حساب جديد
+3. إذا كان هذا أول حساب في النظام سيكون Admin تلقائيًا، غير ذلك سيكون User عادي
+4. سجل الدخول
+5. تحقق من:
    - Dashboard يعمل
    - Inventory يعمل
    - Reports يعمل
@@ -167,8 +169,9 @@ curl https://your-app.railway.app/health
 ### Database (Supabase):
 - [ ] Service Role Key تم الحصول عليه
 - [ ] QUICK_DATABASE_SETUP.sql تم تشغيله
+- [ ] 012_restore_signup_role_policy.sql تم تشغيله
 - [ ] Trigger يعمل
-- [ ] أول مستخدم = Admin
+- [ ] أول مستخدم = Admin، وباقي الحسابات = Users
 
 ---
 

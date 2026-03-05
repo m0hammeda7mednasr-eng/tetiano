@@ -114,7 +114,7 @@ router.post(
     const {
       email,
       full_name,
-      role = "admin",
+      role = "staff",
       password,
       team_id,
       team_role = "member",

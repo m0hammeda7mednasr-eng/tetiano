@@ -125,12 +125,12 @@ export default function Login() {
             </button>
 
             <p className="text-center text-xs text-slate-500 font-medium">
-              أول مرة استخدام؟{" "}
+              ليس لديك حساب؟{" "}
               <Link
                 to="/signup"
                 className="font-bold text-brand-600 hover:text-brand-700 transition-colors"
               >
-                أنشئ أول حساب
+                إنشاء حساب جديد
               </Link>
             </p>
           </form>
