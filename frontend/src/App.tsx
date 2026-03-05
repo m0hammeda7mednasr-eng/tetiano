@@ -7,7 +7,6 @@ import Dashboard from "./pages/Dashboard";
 import Inventory from "./pages/Inventory";
 import DailyReports from "./pages/DailyReports";
 import Settings from "./pages/Settings";
-import BrandSettings from "./pages/BrandSettings";
 import Orders from "./pages/Orders";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -171,7 +170,7 @@ function App() {
 
             {/* Settings */}
             <Route path="settings" element={<Settings />} />
-            <Route path="settings/brands" element={<BrandSettings />} />
+            <Route path="settings/brands" element={<Navigate to="/settings" replace />} />
 
             {/* Help */}
             <Route path="shopify-guide" element={<ShopifyGuide />} />

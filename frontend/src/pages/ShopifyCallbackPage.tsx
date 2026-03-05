@@ -8,9 +8,7 @@ export default function ShopifyCallbackPage() {
   const navigate = useNavigate();
   const { addToast } = useToastStore();
   const [searchParams] = useSearchParams();
-  const [status, setStatus] = useState<"loading" | "success" | "error">(
-    "loading",
-  );
+  const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
   const [message, setMessage] = useState("جاري معالجة الربط مع Shopify...");
 
   useEffect(() => {
@@ -25,36 +23,29 @@ export default function ShopifyCallbackPage() {
           setStatus("error");
           setMessage(`خطأ: ${error}`);
           addToast(`خطأ: ${error}`, "error");
-          setTimeout(() => navigate("/settings"), 3000);
+          setTimeout(() => navigate("/settings?oauth=error&msg=callback_error"), 3000);
           return;
         }
 
-        if (!code || !shop) {
+        if (!code || !shop || !state) {
           setStatus("error");
           setMessage("بيانات الربط ناقصة");
           addToast("بيانات الربط ناقصة", "error");
-          setTimeout(() => navigate("/settings"), 3000);
+          setTimeout(() => navigate("/settings?oauth=error&msg=missing_callback_data"), 3000);
           return;
         }
 
-        // Send callback to backend
-        await api.post("/api/shopify/callback", {
-          code,
-          shop,
-          state,
-        });
+        await api.post("/api/shopify/callback", { code, shop, state });
 
         setStatus("success");
-        setMessage("تم الربط مع Shopify بنجاح! 🎉");
-        addToast("تم الربط مع Shopify بنجاح!", "success");
-
-        // Redirect to settings after 2 seconds
-        setTimeout(() => navigate("/settings?connected=true"), 2000);
+        setMessage("تم الربط مع Shopify بنجاح");
+        addToast("تم الربط مع Shopify بنجاح", "success");
+        setTimeout(() => navigate("/settings?oauth=success"), 2000);
       } catch (err: any) {
         setStatus("error");
         setMessage(err.response?.data?.error || "فشل الربط مع Shopify");
         addToast("فشل الربط مع Shopify", "error");
-        setTimeout(() => navigate("/settings"), 3000);
+        setTimeout(() => navigate("/settings?oauth=error&msg=oauth_failed"), 3000);
       }
     };
 
@@ -68,9 +59,7 @@ export default function ShopifyCallbackPage() {
           <div className="card text-center space-y-6 py-12">
             <Loader className="w-12 h-12 text-brand-500 mx-auto animate-spin" />
             <div>
-              <h1 className="text-xl font-black text-slate-900 mb-2">
-                جاري الربط مع Shopify
-              </h1>
+              <h1 className="text-xl font-black text-slate-900 mb-2">جاري الربط مع Shopify</h1>
               <p className="text-sm text-slate-500">{message}</p>
             </div>
           </div>
@@ -82,13 +71,9 @@ export default function ShopifyCallbackPage() {
               <CheckCircle className="w-8 h-8 text-emerald-600" />
             </div>
             <div>
-              <h1 className="text-xl font-black text-slate-900 mb-2">
-                نجحت العملية!
-              </h1>
+              <h1 className="text-xl font-black text-slate-900 mb-2">نجحت العملية</h1>
               <p className="text-sm text-slate-500">{message}</p>
-              <p className="text-xs text-slate-400 mt-4">
-                جاري إعادة التوجيه...
-              </p>
+              <p className="text-xs text-slate-400 mt-4">جاري إعادة التوجيه...</p>
             </div>
           </div>
         )}
@@ -99,19 +84,12 @@ export default function ShopifyCallbackPage() {
               <AlertTriangle className="w-8 h-8 text-red-600" />
             </div>
             <div>
-              <h1 className="text-xl font-black text-slate-900 mb-2">
-                حدث خطأ
-              </h1>
+              <h1 className="text-xl font-black text-slate-900 mb-2">حدث خطأ</h1>
               <p className="text-sm text-slate-500">{message}</p>
-              <button
-                onClick={() => navigate("/settings")}
-                className="mt-6 btn-brand w-full"
-              >
+              <button onClick={() => navigate("/settings")} className="mt-6 btn-brand w-full">
                 العودة إلى الإعدادات
               </button>
-              <p className="text-xs text-slate-400 mt-4">
-                جاري إعادة التوجيه تلقائياً...
-              </p>
+              <p className="text-xs text-slate-400 mt-4">جاري إعادة التوجيه تلقائيًا...</p>
             </div>
           </div>
         )}

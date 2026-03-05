@@ -23,6 +23,14 @@ const SCOPES = [
   "read_locations",
 ].join(",");
 
+const WEBHOOK_TOPICS = [
+  "orders/create",
+  "orders/updated",
+  "products/create",
+  "products/update",
+  "inventory_levels/update",
+];
+
 type OAuthStateRecord = {
   state: string;
   shop: string;
@@ -51,6 +59,16 @@ function normalizeShopDomain(input: string): string {
     return `${normalized}.myshopify.com`;
   }
   return normalized;
+}
+
+function buildBrandNameFromShop(shopDomain: string): string {
+  const base = shopDomain
+    .replace(".myshopify.com", "")
+    .replace(/[^a-z0-9]+/gi, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+
+  return (base || "shopify_store").slice(0, 80);
 }
 
 function buildOAuthUrl(shopDomain: string, clientId: string, state: string): string {
@@ -183,6 +201,76 @@ async function findBrandById(brandId: string) {
     throw error;
   }
   return data;
+}
+
+async function resolveOrCreateBrandForInstall(shopDomain: string): Promise<Record<string, unknown>> {
+  const { data: byShop, error: byShopError } = await supabase
+    .from("brands")
+    .select("*")
+    .eq("shopify_domain", shopDomain)
+    .maybeSingle();
+  if (byShopError) {
+    throw byShopError;
+  }
+  if (byShop) {
+    return byShop as Record<string, unknown>;
+  }
+
+  const baseName = buildBrandNameFromShop(shopDomain);
+  const { data: existingNames, error: existingNamesError } = await supabase
+    .from("brands")
+    .select("name")
+    .ilike("name", `${baseName}%`);
+  if (existingNamesError) {
+    throw existingNamesError;
+  }
+
+  const usedNames = new Set(
+    (existingNames || [])
+      .map((row: any) => String(row?.name || "").toLowerCase())
+      .filter(Boolean),
+  );
+
+  let candidate = baseName;
+  let suffix = 2;
+  while (usedNames.has(candidate.toLowerCase())) {
+    const suffixPart = `_${suffix}`;
+    const maxBaseLen = Math.max(1, 100 - suffixPart.length);
+    candidate = `${baseName.slice(0, maxBaseLen)}${suffixPart}`;
+    suffix += 1;
+  }
+
+  const { data: createdBrand, error: createError } = await supabase
+    .from("brands")
+    .insert({
+      name: candidate,
+      shopify_domain: shopDomain,
+      // Keep non-null compatibility with earlier schema versions.
+      shopify_location_id: "pending",
+    })
+    .select("*")
+    .maybeSingle();
+
+  if (createError) {
+    const { data: raceBrand, error: raceError } = await supabase
+      .from("brands")
+      .select("*")
+      .eq("shopify_domain", shopDomain)
+      .maybeSingle();
+    if (raceError) {
+      throw raceError;
+    }
+    if (raceBrand) {
+      return raceBrand as Record<string, unknown>;
+    }
+    throw createError;
+  }
+
+  if (!createdBrand) {
+    throw new Error("Failed to create brand for Shopify connection");
+  }
+
+  return createdBrand as Record<string, unknown>;
 }
 
 function getBrandField<T = unknown>(brand: Record<string, unknown>, keys: string[]): T | undefined {
@@ -571,6 +659,9 @@ router.post("/get-install-url", authenticate, async (req: AuthRequest, res: Resp
     let brand: any = null;
     if (brandId) {
       brand = await findBrandById(brandId);
+      if (!brand) {
+        throw new HttpError(404, "brand_not_found", "Brand not found");
+      }
     } else {
       const { data: byShop, error: byShopError } = await supabase
         .from("brands")
@@ -605,10 +696,11 @@ router.post("/get-install-url", authenticate, async (req: AuthRequest, res: Resp
         }
         brand = byShopifyApiKey;
       }
-    }
 
-    if (!brand) {
-      throw new HttpError(404, "brand_not_found", "No brand found for this shop/API key");
+      if (!brand) {
+        // New merchant flow: create brand on the fly from shop domain.
+        brand = await resolveOrCreateBrandForInstall(shopDomain);
+      }
     }
 
     const credentialUpdates: Record<string, unknown> = {
@@ -684,10 +776,18 @@ router.post("/callback", async (req: Request, res: Response) => {
  */
 router.get("/callback", async (req: Request, res: Response) => {
   try {
+    const callbackError = String(req.query.error || "");
     const code = String(req.query.code || "");
     const shop = String(req.query.shop || "");
     const state = String(req.query.state || "");
     const hmac = String(req.query.hmac || "");
+
+    if (callbackError) {
+      if (state) {
+        await deleteOAuthState(state);
+      }
+      return res.redirect(`${FRONTEND_URL}/settings?oauth=declined`);
+    }
 
     if (!code || !shop || !state) {
       throw new HttpError(400, "bad_request", "Missing code, shop or state");
@@ -701,13 +801,16 @@ router.get("/callback", async (req: Request, res: Response) => {
       hmac,
     });
 
+    const brandName = result.brandName || result.shopDomain;
     res.redirect(
-      `${FRONTEND_URL}/settings/brands?connected=true&brand_id=${encodeURIComponent(result.brandId)}`,
+      `${FRONTEND_URL}/settings?oauth=success&brand=${encodeURIComponent(brandName)}`,
     );
   } catch (error: any) {
-    const code = error instanceof HttpError ? error.code : "oauth_failed";
-    logger.error("GET callback failed", { error: error.message, code });
-    res.redirect(`${FRONTEND_URL}/settings/brands?error=${encodeURIComponent(code)}`);
+    const errorCode = error instanceof HttpError ? error.code : "oauth_failed";
+    logger.error("GET callback failed", { error: error.message, code: errorCode });
+    res.redirect(
+      `${FRONTEND_URL}/settings?oauth=error&msg=${encodeURIComponent(errorCode)}`,
+    );
   }
 });
 
@@ -746,7 +849,7 @@ router.get("/brands", authenticate, async (_req: AuthRequest, res: Response) => 
 
 /**
  * POST /api/shopify/setup-webhooks/:brandId
- * Placeholder endpoint to keep settings flow operational.
+ * Register required Shopify webhooks for this brand.
  */
 router.post(
   "/setup-webhooks/:brandId",
@@ -764,23 +867,109 @@ router.post(
         throw new HttpError(400, "not_connected", "Brand is not connected to Shopify");
       }
 
-      logger.info("Webhook setup requested (manual placeholder)", {
+      const shopDomain = normalizeShopDomain(String(brand.shopify_domain || ""));
+      if (!shopDomain) {
+        throw new HttpError(400, "missing_shop_domain", "Brand is missing shopify_domain");
+      }
+
+      const backendBaseUrl = (process.env.BACKEND_URL || "").trim().replace(/\/+$/, "");
+      if (!backendBaseUrl) {
+        throw new HttpError(
+          400,
+          "missing_backend_url",
+          "BACKEND_URL is required to register Shopify webhooks",
+        );
+      }
+
+      const webhookAddress = `${backendBaseUrl}/api/webhooks/shopify`;
+      const adminApiBase = `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}`;
+
+      const { data: existingResponse } = await axios.get(`${adminApiBase}/webhooks.json`, {
+        headers: {
+          "X-Shopify-Access-Token": accessToken,
+        },
+      });
+
+      const existingWebhooks: any[] = existingResponse?.webhooks || [];
+      const existingTopicSet = new Set(
+        existingWebhooks
+          .filter((hook) => String(hook?.address || "").trim() === webhookAddress)
+          .map((hook) => String(hook?.topic || "").trim()),
+      );
+
+      const createdTopics: string[] = [];
+      const skippedTopics: string[] = [];
+      const failedTopics: { topic: string; error: string }[] = [];
+
+      for (const topic of WEBHOOK_TOPICS) {
+        if (existingTopicSet.has(topic)) {
+          skippedTopics.push(topic);
+          continue;
+        }
+
+        try {
+          await axios.post(
+            `${adminApiBase}/webhooks.json`,
+            {
+              webhook: {
+                topic,
+                address: webhookAddress,
+                format: "json",
+              },
+            },
+            {
+              headers: {
+                "X-Shopify-Access-Token": accessToken,
+              },
+            },
+          );
+          createdTopics.push(topic);
+        } catch (webhookError: any) {
+          failedTopics.push({
+            topic,
+            error: webhookError?.response?.data?.errors || webhookError?.message || "unknown_error",
+          });
+        }
+      }
+
+      if (failedTopics.length === WEBHOOK_TOPICS.length) {
+        throw new HttpError(
+          502,
+          "webhook_setup_failed",
+          "Failed to register Shopify webhooks for all topics",
+        );
+      }
+
+      logger.info("Shopify webhook setup completed", {
         brandId,
         requestedBy: req.user?.id,
+        shopDomain,
+        created: createdTopics.length,
+        skipped: skippedTopics.length,
+        failed: failedTopics.length,
       });
+
       await logAuditEvent({
         userId: req.user?.id,
-        action: "shopify.webhooks.setup_requested",
+        action: "shopify.webhooks.setup",
         tableName: "brands",
         recordId: brandId,
         meta: {
           requested_by: req.user?.id,
+          webhook_address: webhookAddress,
+          created_topics: createdTopics,
+          skipped_topics: skippedTopics,
+          failed_topics: failedTopics,
         },
       });
 
       res.json({
         success: true,
-        message: "Webhook setup request accepted. Configure Shopify webhooks to /api/webhooks/shopify.",
+        message: `Webhook setup completed. Created ${createdTopics.length}, skipped ${skippedTopics.length}, failed ${failedTopics.length}.`,
+        webhook_address: webhookAddress,
+        created_topics: createdTopics,
+        skipped_topics: skippedTopics,
+        failed_topics: failedTopics,
       });
     } catch (error: any) {
       const status = error instanceof HttpError ? error.status : 500;

@@ -138,6 +138,13 @@ export default function ShopifySettings() {
       }
     } catch (err: any) {
       console.error("Error loading config:", err);
+      // Set default redirect URI even if config fails
+      const backendUrl = import.meta.env.VITE_API_URL || window.location.origin;
+      setConfig(prev => ({
+        ...prev,
+        redirect_uri: `${backendUrl}/api/shopify/callback`,
+        backend_url: backendUrl,
+      }));
     }
   };
 
@@ -309,6 +316,57 @@ export default function ShopifySettings() {
       {/* Configuration Tab */}
       {activeTab === "config" && (
         <div className="space-y-6">
+          {/* Redirect URI - Show First and Prominent */}
+          <div className="card border-l-4 border-orange-500 bg-gradient-to-r from-orange-50 to-transparent p-6">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Link className="w-5 h-5 text-orange-600" />
+                <h3 className="text-base font-black text-slate-800">
+                  Redirect URI - مهم جداً!
+                </h3>
+              </div>
+              <p className="text-sm text-slate-600">
+                انسخ هذا الرابط وضعه في إعدادات التطبيق في Shopify قبل الربط
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={
+                    config.redirect_uri ||
+                    `${config.backend_url || window.location.origin}/api/shopify/callback`
+                  }
+                  readOnly
+                  className="input flex-1 bg-white font-mono text-sm font-bold text-orange-700"
+                />
+                <button
+                  onClick={() =>
+                    copyToClipboard(
+                      config.redirect_uri ||
+                        `${config.backend_url || window.location.origin}/api/shopify/callback`,
+                      "redirect_uri_top"
+                    )
+                  }
+                  className="btn-primary"
+                >
+                  {copiedField === "redirect_uri_top" ? (
+                    <>
+                      <Check className="w-4 h-4" />
+                      تم النسخ
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4" />
+                      نسخ
+                    </>
+                  )}
+                </button>
+              </div>
+              <p className="text-xs text-slate-500">
+                📍 المكان: Shopify Admin → Settings → Apps → Develop apps → [Your App] → Configuration → App setup → URLs → Allowed redirection URL(s)
+              </p>
+            </div>
+          </div>
+
           {/* Setup Guide */}
           <div className="card border-l-4 border-blue-500 bg-gradient-to-r from-blue-50 to-transparent p-5">
             <div className="flex gap-3">
@@ -334,7 +392,7 @@ export default function ShopifySettings() {
                     انسخ Admin API access token و API key وضعهم في الحقول أدناه
                   </li>
                   <li>
-                    انسخ Redirect URI من الأسفل وضعه في App setup → URLs →
+                    انسخ Redirect URI من الأعلى وضعه في App setup → URLs →
                     Allowed redirection URL(s)
                   </li>
                 </ol>
