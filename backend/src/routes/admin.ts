@@ -1009,6 +1009,8 @@ router.get(
   requireRole("admin"),
   async (req: AuthRequest, res: Response) => {
     try {
+      const backendUrl = process.env.BACKEND_URL || process.env.API_URL || "http://localhost:3002";
+      
       // Get config from environment or database
       const config = {
         shopify_domain: process.env.SHOPIFY_DOMAIN || "",
@@ -1019,20 +1021,41 @@ router.get(
           process.env.SHOPIFY_CLIENT_ID &&
           process.env.SHOPIFY_CLIENT_SECRET
         ),
-        redirect_uri: `${process.env.BACKEND_URL || "http://localhost:3000"}/api/shopify/callback`,
+        redirect_uri: `${backendUrl}/api/shopify/callback`,
+        backend_url: backendUrl,
       };
 
       // Get webhooks status
       const topics = [
-        { topic: "orders/create", label: "إنشاء أوردر جديد" },
-        { topic: "orders/updated", label: "تحديث أوردر" },
-        { topic: "products/create", label: "إضافة منتج" },
-        { topic: "products/update", label: "تحديث منتج" },
-        { topic: "inventory_levels/update", label: "تحديث المخزون" },
+        { 
+          topic: "orders/create", 
+          label: "إنشاء أوردر جديد",
+          description: "يتم تفعيله عند إنشاء أوردر جديد في Shopify"
+        },
+        { 
+          topic: "orders/updated", 
+          label: "تحديث أوردر",
+          description: "يتم تفعيله عند تحديث حالة أوردر"
+        },
+        { 
+          topic: "products/create", 
+          label: "إضافة منتج",
+          description: "يتم تفعيله عند إضافة منتج جديد"
+        },
+        { 
+          topic: "products/update", 
+          label: "تحديث منتج",
+          description: "يتم تفعيله عند تحديث بيانات منتج"
+        },
+        { 
+          topic: "inventory_levels/update", 
+          label: "تحديث المخزون",
+          description: "يتم تفعيله عند تغيير كمية المخزون"
+        },
       ];
 
       const webhooks = await Promise.all(
-        topics.map(async ({ topic, label }) => {
+        topics.map(async ({ topic, label, description }) => {
           const { data: events } = await supabase
             .from("shopify_webhook_events")
             .select("id, created_at")
@@ -1043,6 +1066,7 @@ router.get(
           return {
             topic,
             label,
+            description,
             enabled: Boolean(events && events.length > 0),
             last_event: events?.[0]?.created_at,
             status: events && events.length > 0 ? "active" : "inactive",
@@ -1070,9 +1094,11 @@ router.post(
     }
 
     try {
+      const backendUrl = process.env.BACKEND_URL || process.env.API_URL || "http://localhost:3002";
+      
       // In production, save to secure storage or environment
       // For now, we'll return the config with redirect URI
-      const redirect_uri = `${process.env.BACKEND_URL || "http://localhost:3000"}/api/shopify/callback`;
+      const redirect_uri = `${backendUrl}/api/shopify/callback`;
 
       const config = {
         shopify_domain,
@@ -1080,6 +1106,7 @@ router.post(
         client_secret,
         is_connected: true,
         redirect_uri,
+        backend_url: backendUrl,
       };
 
       logger.info("Admin: shopify config saved", {
@@ -1100,7 +1127,7 @@ router.post(
       res.json({
         success: true,
         config,
-        message: "تم حفظ الإعدادات. يمكنك الآن الاتصال بـ Shopify",
+        message: "تم حفظ الإعدادات بنجاح ✓",
       });
     } catch (err: any) {
       logger.error("Admin: save shopify config error", { error: err.message });
