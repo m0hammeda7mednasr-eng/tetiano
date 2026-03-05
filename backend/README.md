@@ -28,6 +28,10 @@ Required:
 - `NODE_ENV`
 - `FRONTEND_URL`
 
+Optional (CORS):
+- `CORS_ALLOWED_ORIGINS` (comma-separated exact origins)
+- `CORS_ALLOWED_ORIGIN_PATTERNS` (comma-separated regex patterns)
+
 ## API Endpoints
 
 - `GET /health` - Health check

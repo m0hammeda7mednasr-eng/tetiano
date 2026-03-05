@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 import express from "express";
-import cors from "cors";
+import cors, { CorsOptions } from "cors";
 import { logger } from "./utils/logger";
 import { startScheduledJobs } from "./jobs";
 import { rateLimiter } from "./middleware/rateLimiter";
@@ -19,36 +19,69 @@ import { errorHandler } from "./middleware/errorHandler";
 const app = express();
 const PORT = process.env.PORT || 3002;
 
-const allowedOrigins = [
-  process.env.FRONTEND_URL || "http://localhost:5173",
+const configuredOrigins = [
+  process.env.FRONTEND_URL,
+  process.env.CORS_ALLOWED_ORIGINS,
   "http://localhost:5173",
   "http://localhost:3000",
-  "https://tetiano-git-main-mohs-projects-0b03337a.vercel.app",
   "https://tetiano.vercel.app",
+]
+  .flatMap((entry) => (entry ? entry.split(",") : []))
+  .map((entry) => entry.trim())
+  .filter(Boolean);
+
+const allowedOrigins = new Set(configuredOrigins);
+
+const patternStrings = (process.env.CORS_ALLOWED_ORIGIN_PATTERNS || "")
+  .split(",")
+  .map((entry) => entry.trim())
+  .filter(Boolean);
+
+const allowedOriginPatterns: RegExp[] = [
+  /^https:\/\/tetiano(?:-[a-z0-9-]+)?\.vercel\.app$/i,
+  /^https:\/\/.*\.vercel\.app$/i, // Allow all Vercel deployments
+  /^https:\/\/[a-z0-9-]+\.railway\.app$/i,
 ];
 
-// ── CORS ──────────────────────────────────────────────────────
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      // Allow requests with no origin (mobile apps, Postman, etc.)
-      if (!origin) return cb(null, true);
-      
-      // Check if origin is in allowed list
-      if (allowedOrigins.includes(origin)) return cb(null, true);
-      
-      // Allow all Vercel preview deployments
-      if (origin.includes('.vercel.app')) return cb(null, true);
-      
-      // Allow Railway deployments
-      if (origin.includes('.railway.app')) return cb(null, true);
-      
-      cb(new Error(`CORS: Origin not allowed: ${origin}`));
-    },
-    credentials: true,
-  }),
-);
+for (const patternText of patternStrings) {
+  try {
+    allowedOriginPatterns.push(new RegExp(patternText, "i"));
+  } catch {
+    logger.warn("Invalid CORS regex pattern ignored", { patternText });
+  }
+}
 
+const isOriginAllowed = (origin?: string): boolean => {
+  if (!origin) {
+    return true;
+  }
+
+  if (allowedOrigins.has(origin)) {
+    return true;
+  }
+
+  return allowedOriginPatterns.some((pattern) => pattern.test(origin));
+};
+
+const corsOptions: CorsOptions = {
+  origin: (origin, callback) => {
+    if (isOriginAllowed(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    logger.warn("CORS origin blocked", { origin });
+    callback(null, false);
+  },
+  credentials: true,
+  methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Authorization", "Content-Type", "X-Requested-With", "Accept", "Origin"],
+  optionsSuccessStatus: 204,
+};
+
+// CORS
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 // ── Security headers ──────────────────────────────────────────
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -129,3 +162,4 @@ app.listen(PORT, () => {
 });
 
 export default app;
+
