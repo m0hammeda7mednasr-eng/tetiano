@@ -23,13 +23,26 @@ const allowedOrigins = [
   process.env.FRONTEND_URL || "http://localhost:5173",
   "http://localhost:5173",
   "http://localhost:3000",
+  "https://tetiano-git-main-mohs-projects-0b03337a.vercel.app",
+  "https://tetiano.vercel.app",
 ];
 
 // ── CORS ──────────────────────────────────────────────────────
 app.use(
   cors({
     origin: (origin, cb) => {
-      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      // Allow requests with no origin (mobile apps, Postman, etc.)
+      if (!origin) return cb(null, true);
+      
+      // Check if origin is in allowed list
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      
+      // Allow all Vercel preview deployments
+      if (origin.includes('.vercel.app')) return cb(null, true);
+      
+      // Allow Railway deployments
+      if (origin.includes('.railway.app')) return cb(null, true);
+      
       cb(new Error(`CORS: Origin not allowed: ${origin}`));
     },
     credentials: true,
