@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import api from '../lib/api';
 import { supabase } from '../lib/supabase';
 import {
-  ShoppingBag, User, Calendar, CreditCard, Truck,
+  ShoppingBag, User, Truck,
   RefreshCw, Clock, Package, AlertCircle, ChevronDown
 } from 'lucide-react';
 

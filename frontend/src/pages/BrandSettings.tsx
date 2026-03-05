@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import api from "../lib/api";
 import { supabase } from "../lib/supabase";
-import { Zap, RefreshCw, AlertTriangle, Link2, Settings, CheckCircle, XCircle } from "lucide-react";  // only used icons including connection status
+import { RefreshCw, Link2, Settings, CheckCircle, XCircle } from "lucide-react";
 
 interface Brand {
   id: string;

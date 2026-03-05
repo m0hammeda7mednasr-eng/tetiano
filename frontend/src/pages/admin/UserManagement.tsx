@@ -80,7 +80,7 @@ export default function UserManagement() {
   const [form, setForm] = useState({
     full_name: "",
     email: "",
-    role: "staff" as "admin" | "manager" | "staff",
+    role: "admin" as "admin" | "manager" | "staff",
     team_id: "",
     password: "",
     avatar_color: AVATAR_COLORS[0],
@@ -113,7 +113,7 @@ export default function UserManagement() {
     setForm({
       full_name: "",
       email: "",
-      role: "staff",
+      role: "admin",
       team_id: "",
       password: "",
       avatar_color: AVATAR_COLORS[0],
@@ -171,7 +171,7 @@ export default function UserManagement() {
         setForm({
           full_name: "",
           email: "",
-          role: "staff",
+          role: "admin",
           team_id: "",
           password: "",
           avatar_color: AVATAR_COLORS[0],

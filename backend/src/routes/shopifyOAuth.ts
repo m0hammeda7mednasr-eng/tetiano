@@ -4,6 +4,7 @@ import axios from "axios";
 import { supabase } from "../config/supabase";
 import { authenticate, AuthRequest } from "../middleware/auth";
 import { logger } from "../utils/logger";
+import { logAuditEvent } from "../utils/auditLogger";
 
 const router = Router();
 
@@ -437,6 +438,7 @@ async function completeOAuthCallback(params: {
   if (!brand) {
     brand = await resolveBrandForOAuth(oauthState, shopDomain);
   }
+  const beforeConnectionState = getPublicBrandConnection(brand as Record<string, unknown>);
 
   await updateBrandConnection({
     brand: brand as Record<string, unknown>,
@@ -446,6 +448,21 @@ async function completeOAuthCallback(params: {
     scope,
     locationId,
   });
+
+  const refreshedBrand = await findBrandById(String((brand as Record<string, unknown>).id));
+  if (refreshedBrand) {
+    await logAuditEvent({
+      userId: oauthState.user_id || null,
+      action: "shopify.oauth.connected",
+      tableName: "brands",
+      recordId: String(refreshedBrand.id),
+      before: beforeConnectionState,
+      after: getPublicBrandConnection(refreshedBrand as Record<string, unknown>),
+      meta: {
+        shop: shopDomain,
+      },
+    });
+  }
 
   await deleteOAuthState(params.state);
 
@@ -751,6 +768,15 @@ router.post(
         brandId,
         requestedBy: req.user?.id,
       });
+      await logAuditEvent({
+        userId: req.user?.id,
+        action: "shopify.webhooks.setup_requested",
+        tableName: "brands",
+        recordId: brandId,
+        meta: {
+          requested_by: req.user?.id,
+        },
+      });
 
       res.json({
         success: true,
@@ -778,7 +804,21 @@ router.post(
         throw new HttpError(404, "brand_not_found", "Brand not found");
       }
 
+      const beforeConnectionState = getPublicBrandConnection(brand as Record<string, unknown>);
       await clearBrandConnection(brand as Record<string, unknown>);
+      const refreshedBrand = await findBrandById(brandId);
+      const afterConnectionState = refreshedBrand
+        ? getPublicBrandConnection(refreshedBrand as Record<string, unknown>)
+        : null;
+
+      await logAuditEvent({
+        userId: req.user?.id,
+        action: "shopify.disconnected",
+        tableName: "brands",
+        recordId: brandId,
+        before: beforeConnectionState,
+        after: afterConnectionState,
+      });
 
       logger.info("Brand disconnected from Shopify", { brandId, userId: req.user?.id });
       res.json({ success: true, message: "Brand disconnected successfully" });

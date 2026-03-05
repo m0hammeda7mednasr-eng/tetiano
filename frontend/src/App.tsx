@@ -16,6 +16,7 @@ import UserManagement from "./pages/admin/UserManagement";
 import TeamManagement from "./pages/admin/TeamManagement";
 import AdminReports from "./pages/admin/AdminReports";
 import ShopifySettings from "./pages/admin/ShopifySettings";
+import AuditLogs from "./pages/admin/AuditLogs";
 import ShopifyGuide from "./pages/ShopifyGuide";
 import ShopifyCallbackPage from "./pages/ShopifyCallbackPage";
 import NotFound from "./pages/NotFound";
@@ -221,6 +222,14 @@ function App() {
               element={
                 <AdminRoute>
                   <ShopifySettings />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="admin/audit"
+              element={
+                <AdminRoute>
+                  <AuditLogs />
                 </AdminRoute>
               }
             />

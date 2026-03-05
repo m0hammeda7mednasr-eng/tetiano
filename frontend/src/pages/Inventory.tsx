@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import api from '../lib/api';
 import {
-  Search, Plus, History, Package, Tag, DollarSign,
-  AlertCircle, ShoppingBag, RefreshCw, X, Filter
+  Search, Plus, History, Package, Tag,
+  ShoppingBag, RefreshCw, X
 } from 'lucide-react';
 import StockAdjustModal from '../components/StockAdjustModal';
 import StockLedgerModal from '../components/StockLedgerModal';
@@ -155,7 +155,7 @@ export default function Inventory() {
                       </td>
                     </tr>
                   )
-                  : variants.map((v, idx) => {
+                  : variants.map((v) => {
                     const avail = v.inventory_levels?.available || 0;
                     const st = stockStatus(avail);
                     return (

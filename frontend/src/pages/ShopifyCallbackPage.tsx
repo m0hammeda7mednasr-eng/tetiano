@@ -38,7 +38,7 @@ export default function ShopifyCallbackPage() {
         }
 
         // Send callback to backend
-        const response = await api.post("/api/shopify/callback", {
+        await api.post("/api/shopify/callback", {
           code,
           shop,
           state,

@@ -7,7 +7,6 @@ import {
   EyeOff,
   Copy,
   Check,
-  AlertTriangle,
   Server,
   Zap,
   RefreshCw,
@@ -228,18 +227,36 @@ export default function BrandSettingsPage() {
                         ? brand.shopify_api_key
                         : "***" + brand.shopify_api_key.slice(-4)}
                     </div>
-                    <button
-                      onClick={() =>
-                        brand.shopify_api_key && copyToClipboard(brand.shopify_api_key, "key")
-                      }
-                      className="p-1.5 hover:bg-slate-100 rounded transition-colors"
-                    >
-                      {copiedId === "key" ? (
-                        <Check className="w-4 h-4 text-emerald-600" />
-                      ) : (
-                        <Copy className="w-4 h-4 text-slate-400" />
-                      )}
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() =>
+                          setShowSecret(showSecret === "key" ? null : "key")
+                        }
+                        className="p-1.5 hover:bg-slate-100 rounded transition-colors"
+                      >
+                        {showSecret === "key" ? (
+                          <EyeOff className="w-4 h-4 text-slate-400" />
+                        ) : (
+                          <Eye className="w-4 h-4 text-slate-400" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() =>
+                          brand.shopify_api_key &&
+                          copyToClipboard(
+                            brand.shopify_api_key,
+                            `${brand.id}-key`,
+                          )
+                        }
+                        className="p-1.5 hover:bg-slate-100 rounded transition-colors"
+                      >
+                        {copiedId === `${brand.id}-key` ? (
+                          <Check className="w-4 h-4 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-4 h-4 text-slate-400" />
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

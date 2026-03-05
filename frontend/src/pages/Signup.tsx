@@ -61,17 +61,57 @@ export default function Signup() {
   if (!bootstrapOpen) {
     return (
       <div className="auth-page px-4" dir="rtl">
-        <div className="auth-card p-8 w-full max-w-md text-center space-y-4">
-          <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto">
-            <ShieldAlert className="w-6 h-6 text-amber-600" />
+        <div className="w-full max-w-md relative anim-fade-up">
+          <div className="fixed inset-0 pointer-events-none overflow-hidden">
+            <div className="absolute -top-24 -right-24 w-64 h-64 bg-amber-100/40 rounded-full blur-3xl" />
+            <div className="absolute -bottom-20 -left-20 w-56 h-56 bg-brand-100/40 rounded-full blur-3xl" />
           </div>
-          <h1 className="text-xl font-black text-slate-800">التسجيل مغلق</h1>
-          <p className="text-sm text-slate-500 font-medium">
-            النظام مهيأ بالفعل. إنشاء الحسابات الجديدة يتم من لوحة الأدمن فقط.
-          </p>
-          <Link to="/login" className="btn-primary justify-center w-full">
-            الذهاب لتسجيل الدخول
-          </Link>
+
+          <div className="auth-card p-7 sm:p-8 text-center space-y-6 relative">
+            <div className="space-y-3">
+              <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto">
+                <ShieldAlert className="w-7 h-7 text-amber-600" />
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-full bg-amber-50 border border-amber-200 px-3 py-1 text-[11px] font-black text-amber-700">
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                التسجيل الذاتي متوقف
+              </div>
+              <h1 className="text-2xl font-black text-slate-900 leading-tight">
+                إنشاء الحسابات من لوحة الأدمن فقط
+              </h1>
+              <p className="text-sm text-slate-600 font-medium leading-relaxed">
+                تم إعداد النظام بالفعل. إضافة أي حساب جديد تتم عبر لوحة الإدارة مع
+                تحديد الدور والصلاحيات.
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-right space-y-2.5">
+              <p className="text-[11px] font-black tracking-[0.12em] text-slate-400 uppercase">
+                خطوات سريعة
+              </p>
+              <div className="flex items-start gap-2 text-sm font-medium text-slate-700">
+                <CheckCircle className="w-4 h-4 mt-0.5 text-emerald-600 flex-shrink-0" />
+                سجّل الدخول بحساب الأدمن.
+              </div>
+              <div className="flex items-start gap-2 text-sm font-medium text-slate-700">
+                <CheckCircle className="w-4 h-4 mt-0.5 text-emerald-600 flex-shrink-0" />
+                افتح إدارة المستخدمين من لوحة التحكم.
+              </div>
+              <div className="flex items-start gap-2 text-sm font-medium text-slate-700">
+                <CheckCircle className="w-4 h-4 mt-0.5 text-emerald-600 flex-shrink-0" />
+                أنشئ الحساب وحدد الفريق والدور المناسب.
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Link to="/login" className="btn-primary justify-center w-full py-3">
+                الذهاب إلى تسجيل الدخول
+              </Link>
+              <p className="text-xs text-slate-500 font-medium">
+                إذا كنت تحتاج حسابًا جديدًا، تواصل مع مسؤول النظام الحالي.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     );

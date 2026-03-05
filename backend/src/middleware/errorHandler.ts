@@ -19,6 +19,9 @@ export const errorHandler = (
   res: Response,
   next: NextFunction
 ) => {
+  // Keep express error middleware signature (4 args) and mark next as intentionally unused.
+  void next;
+
   logger.error('Error occurred', {
     error: err.message,
     stack: err.stack,

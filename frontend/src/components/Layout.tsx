@@ -23,6 +23,7 @@ const ADMIN_NAV = [
   { label: 'التيمات', path: '/admin/teams', icon: Shield },
   { label: 'Shopify', path: '/admin/shopify', icon: ShoppingCart },
   { label: 'تقارير الفريق', path: '/admin/reports', icon: FileText },
+  { label: 'Audit Logs', path: '/admin/audit', icon: Activity },
 ];
 
 export default function Layout() {

@@ -2,12 +2,65 @@ import { Router, Response } from "express";
 import { authenticate, requireRole, AuthRequest } from "../middleware/auth";
 import { supabase } from "../config/supabase";
 import { logger } from "../utils/logger";
+import { logAuditEvent } from "../utils/auditLogger";
 import crypto from "crypto";
 
 const router = Router();
 
 // All admin routes require authentication + admin role
 router.use(authenticate);
+
+async function getUserSnapshot(userId: string) {
+  const { data: profile } = await supabase
+    .from("user_profiles")
+    .select("id, full_name, role, is_active, avatar_color, created_at, updated_at")
+    .eq("id", userId)
+    .maybeSingle();
+
+  const { data: teams } = await supabase
+    .from("team_members")
+    .select("team_id, role")
+    .eq("user_id", userId);
+
+  return {
+    ...(profile || {}),
+    teams: teams || [],
+  };
+}
+
+async function getTeamSnapshot(teamId: string) {
+  const { data: team } = await supabase
+    .from("teams")
+    .select("id, name, description, color, is_active, created_at, updated_at")
+    .eq("id", teamId)
+    .maybeSingle();
+
+  const { data: members } = await supabase
+    .from("team_members")
+    .select("user_id, role")
+    .eq("team_id", teamId);
+
+  const { data: permissions } = await supabase
+    .from("team_permissions")
+    .select("*")
+    .eq("team_id", teamId)
+    .maybeSingle();
+
+  return {
+    ...(team || {}),
+    members: members || [],
+    permissions: permissions || null,
+  };
+}
+
+async function getBrandSnapshot(brandId: string) {
+  const { data } = await supabase
+    .from("brands")
+    .select("*")
+    .eq("id", brandId)
+    .maybeSingle();
+  return data;
+}
 
 // ══════════════════════════════════════════════
 //  USERS MANAGEMENT
@@ -61,7 +114,7 @@ router.post(
     const {
       email,
       full_name,
-      role = "staff",
+      role = "admin",
       password,
       team_id,
       team_role = "member",
@@ -125,6 +178,20 @@ router.post(
         role,
         createdBy: req.user?.id,
       });
+
+      const createdSnapshot = await getUserSnapshot(userId);
+      await logAuditEvent({
+        userId: req.user?.id,
+        action: "admin.user.create",
+        tableName: "user_profiles",
+        recordId: userId,
+        after: createdSnapshot,
+        meta: {
+          email,
+          created_by: req.user?.id,
+        },
+      });
+
       res.json({
         success: true,
         userId,
@@ -147,6 +214,8 @@ router.patch(
     const { role, is_active, full_name, avatar_color, team_id } = req.body;
 
     try {
+      const beforeSnapshot = await getUserSnapshot(id);
+
       const updates: any = { updated_at: new Date().toISOString() };
       if (role !== undefined) updates.role = role;
       if (is_active !== undefined) updates.is_active = is_active;
@@ -178,6 +247,16 @@ router.patch(
         }
       }
 
+      const afterSnapshot = await getUserSnapshot(id);
+      await logAuditEvent({
+        userId: req.user?.id,
+        action: "admin.user.update",
+        tableName: "user_profiles",
+        recordId: id,
+        before: beforeSnapshot,
+        after: afterSnapshot,
+      });
+
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -192,11 +271,24 @@ router.delete(
   async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     try {
+      const beforeSnapshot = await getUserSnapshot(id);
+
       await supabase
         .from("user_profiles")
         .update({ is_active: false })
         .eq("id", id);
       await supabase.auth.admin.updateUserById(id, { ban_duration: "none" });
+
+      const afterSnapshot = await getUserSnapshot(id);
+      await logAuditEvent({
+        userId: req.user?.id,
+        action: "admin.user.deactivate",
+        tableName: "user_profiles",
+        recordId: id,
+        before: beforeSnapshot,
+        after: afterSnapshot,
+      });
+
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -222,6 +314,15 @@ router.post(
     const tempPassword = providedPassword || crypto.randomBytes(8).toString("hex");
     try {
       await supabase.auth.admin.updateUserById(id, { password: tempPassword });
+      await logAuditEvent({
+        userId: req.user?.id,
+        action: "admin.user.reset_password",
+        tableName: "user_profiles",
+        recordId: id,
+        meta: {
+          reset_by: req.user?.id,
+        },
+      });
       res.json({ success: true, tempPassword });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -312,6 +413,16 @@ router.post(
       await supabase.from("team_permissions").insert(perms);
 
       logger.info("Admin: team created", { teamId: team.id, name });
+
+      const createdTeamSnapshot = await getTeamSnapshot(team.id);
+      await logAuditEvent({
+        userId: req.user?.id,
+        action: "admin.team.create",
+        tableName: "teams",
+        recordId: team.id,
+        after: createdTeamSnapshot,
+      });
+
       res.json({ success: true, team });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -328,6 +439,8 @@ router.patch(
     const { name, description, color, permissions, member_ids } = req.body;
 
     try {
+      const beforeSnapshot = await getTeamSnapshot(id);
+
       // Update team basics
       if (name || description || color) {
         const { error } = await supabase
@@ -372,6 +485,16 @@ router.patch(
         }
       }
 
+      const afterSnapshot = await getTeamSnapshot(id);
+      await logAuditEvent({
+        userId: req.user?.id,
+        action: "admin.team.update",
+        tableName: "teams",
+        recordId: id,
+        before: beforeSnapshot,
+        after: afterSnapshot,
+      });
+
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -385,10 +508,23 @@ router.delete(
   requireRole("admin"),
   async (req: AuthRequest, res: Response) => {
     try {
+      const beforeSnapshot = await getTeamSnapshot(req.params.id);
+
       await supabase
         .from("teams")
         .update({ is_active: false })
         .eq("id", req.params.id);
+
+      const afterSnapshot = await getTeamSnapshot(req.params.id);
+      await logAuditEvent({
+        userId: req.user?.id,
+        action: "admin.team.deactivate",
+        tableName: "teams",
+        recordId: req.params.id,
+        before: beforeSnapshot,
+        after: afterSnapshot,
+      });
+
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -675,6 +811,16 @@ router.post(
       logger.info("Admin: manual sync triggered", { brandId });
       res.json({ success: true, message: "جاري المزامجة..." });
 
+      await logAuditEvent({
+        userId: req.user?.id,
+        action: "admin.shopify.sync_brand",
+        tableName: "brands",
+        recordId: brandId,
+        meta: {
+          triggered_by: req.user?.id,
+        },
+      });
+
       // Trigger actual sync in background (non-blocking)
       // In production, this would queue a job
     } catch (err: any) {
@@ -693,6 +839,15 @@ router.patch(
 
     // In a real system, this would update webhook configuration in Shopify
     logger.info("Webhook toggle", { topic, enabled });
+    await logAuditEvent({
+      userId: req.user?.id,
+      action: "admin.shopify.webhook_toggle",
+      tableName: "shopify_webhook_events",
+      meta: {
+        topic,
+        enabled: Boolean(enabled),
+      },
+    });
 
     res.json({
       success: true,
@@ -713,6 +868,7 @@ router.post(
     }
 
     try {
+      const beforeSnapshot = await getBrandSnapshot(brandId);
       const { error } = await supabase
         .from("brands")
         .update({
@@ -729,6 +885,15 @@ router.post(
 
       logger.info("Admin: shopify credentials saved", { brandId, domain });
       res.json({ success: true, message: "تم ربط المتجر بنجاح" });
+      const afterSnapshot = await getBrandSnapshot(brandId);
+      await logAuditEvent({
+        userId: req.user?.id,
+        action: "admin.shopify.setup_credentials",
+        tableName: "brands",
+        recordId: brandId,
+        before: beforeSnapshot,
+        after: afterSnapshot,
+      });
     } catch (err: any) {
       logger.error("Admin: credentials error", { error: err.message });
       res.status(500).json({ error: err.message });
@@ -737,6 +902,87 @@ router.post(
 );
 
 // ── Helper ──────────────────────────────────────────────
+/** GET /api/admin/audit-logs - audit trail with filters */
+router.get(
+  "/audit-logs",
+  requireRole("admin"),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const {
+        page = "1",
+        limit = "50",
+        action,
+        table_name,
+        user_id,
+        start_date,
+        end_date,
+      } = req.query as Record<string, string>;
+
+      const parsedPage = Math.max(1, Number(page) || 1);
+      const parsedLimit = Math.min(200, Math.max(1, Number(limit) || 50));
+      const from = (parsedPage - 1) * parsedLimit;
+      const to = from + parsedLimit - 1;
+
+      let query = supabase
+        .from("audit_logs")
+        .select(
+          `
+            id,
+            user_id,
+            action,
+            table_name,
+            record_id,
+            changes,
+            created_at
+          `,
+          { count: "exact" },
+        )
+        .order("created_at", { ascending: false });
+
+      if (action) query = query.ilike("action", `%${action}%`);
+      if (table_name) query = query.eq("table_name", table_name);
+      if (user_id) query = query.eq("user_id", user_id);
+      if (start_date) query = query.gte("created_at", `${start_date}T00:00:00`);
+      if (end_date) query = query.lte("created_at", `${end_date}T23:59:59`);
+
+      const { data, error, count } = await query.range(from, to);
+      if (error) throw error;
+
+      const logs = data || [];
+      const userIds = Array.from(
+        new Set(logs.map((row: any) => row.user_id).filter(Boolean)),
+      ) as string[];
+
+      let nameMap = new Map<string, string>();
+      if (userIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from("user_profiles")
+          .select("id, full_name")
+          .in("id", userIds);
+        nameMap = new Map((profiles || []).map((p: any) => [p.id, p.full_name || ""]));
+      }
+
+      const normalizedLogs = logs.map((row: any) => ({
+        ...row,
+        actor_name: row.user_id ? nameMap.get(row.user_id) || null : null,
+      }));
+
+      res.json({
+        logs: normalizedLogs,
+        pagination: {
+          page: parsedPage,
+          limit: parsedLimit,
+          total: count || 0,
+          total_pages: Math.ceil((count || 0) / parsedLimit),
+        },
+      });
+    } catch (err: any) {
+      logger.error("Admin: audit logs error", { error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
 function randomColor() {
   const colors = [
     "#6366f1",

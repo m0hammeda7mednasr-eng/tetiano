@@ -14,7 +14,6 @@ import {
   ChevronRight,
   RefreshCw,
   AlertTriangle,
-  Zap,
   Package,
   ShoppingCart,
   Lock,
@@ -444,6 +443,12 @@ export default function AdminDashboard() {
                   to: "/admin/reports",
                   icon: FileText,
                   cls: "text-emerald-600 bg-emerald-50",
+                },
+                {
+                  label: "Audit Logs",
+                  to: "/admin/audit",
+                  icon: Server,
+                  cls: "text-cyan-600 bg-cyan-50",
                 },
                 {
                   label: "الإعدادات",

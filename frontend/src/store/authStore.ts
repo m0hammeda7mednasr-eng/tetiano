@@ -98,20 +98,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (error) throw error;
   },
 
-  // Signup is allowed only for the very first account bootstrap.
+  // Signup is open; role assignment is handled by DB trigger policy.
   signUp: async (email: string, password: string, full_name: string) => {
-    const { count, error: countError } = await supabase
-      .from("user_profiles")
-      .select("id", { count: "exact", head: true });
-
-    if (countError) {
-      throw new Error("تعذر التحقق من حالة التسجيل. حاول مرة أخرى.");
-    }
-
-    if ((count || 0) > 0) {
-      throw new Error("التسجيل الذاتي متاح لأول حساب فقط. اطلب الحساب من الأدمن.");
-    }
-
     const { error } = await supabase.auth.signUp({
       email,
       password,

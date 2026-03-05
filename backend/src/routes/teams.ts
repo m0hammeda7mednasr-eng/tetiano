@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
+import { authenticate, AuthRequest } from '../middleware/auth';
 import { supabase } from '../config/supabase';
 import { logger } from '../utils/logger';
 

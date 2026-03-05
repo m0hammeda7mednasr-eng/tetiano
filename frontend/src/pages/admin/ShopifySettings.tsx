@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   ShoppingCart,
-  Lock,
   Zap,
   Settings,
   RefreshCw,
@@ -16,7 +15,6 @@ import {
   EyeOff,
 } from "lucide-react";
 import api from "../../lib/api";
-import { useAuthStore } from "../../store/authStore";
 import { useToastStore } from "../../store/toastStore";
 
 interface BrandIntegration {
@@ -40,7 +38,6 @@ interface WebhookConfig {
 }
 
 export default function ShopifySettings() {
-  const { profile } = useAuthStore();
   const { addToast } = useToastStore();
 
   const [brands, setBrands] = useState<BrandIntegration[]>([]);

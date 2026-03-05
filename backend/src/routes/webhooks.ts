@@ -59,7 +59,6 @@ router.post('/shopify', async (req: Request, res: Response) => {
 
   // ── Look up brand to get its webhook secret ────────────────
   let webhookSecret = GLOBAL_WEBHOOK_SECRET;
-  let brand: any = null;
 
   if (shopDomain) {
     try {
@@ -69,7 +68,6 @@ router.post('/shopify', async (req: Request, res: Response) => {
         .eq('shopify_domain', shopDomain)
         .single();
 
-      brand = data;
       // Prefer brand-specific secret, fallback to api_secret, then global
       if (data?.webhook_secret) webhookSecret = data.webhook_secret;
       else if (data?.api_secret) webhookSecret = data.api_secret;
