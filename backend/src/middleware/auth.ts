@@ -12,6 +12,73 @@ export interface AuthRequest extends Request {
   };
 }
 
+function isSchemaCompatibilityError(error: any): boolean {
+  const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    text.includes("column") ||
+    text.includes("relation") ||
+    text.includes("does not exist") ||
+    text.includes("schema cache") ||
+    text.includes("unknown relationship")
+  );
+}
+
+function coercePermissionMap(value: unknown): Record<string, boolean> {
+  if (Array.isArray(value)) {
+    return value.reduce<Record<string, boolean>>((acc, item) => {
+      if (typeof item === "string" && item.trim()) {
+        acc[item.trim()] = true;
+      }
+      return acc;
+    }, {});
+  }
+
+  if (value && typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>).reduce<Record<string, boolean>>(
+      (acc, [key, raw]) => {
+        if (typeof raw === "boolean") {
+          acc[key] = raw;
+        }
+        return acc;
+      },
+      {},
+    );
+  }
+
+  return {};
+}
+
+function buildRoleFallbackPermissions(role: "admin" | "manager" | "staff"): Record<string, boolean> {
+  if (role === "admin") {
+    return {};
+  }
+
+  if (role === "manager") {
+    return {
+      can_view_inventory: true,
+      can_edit_inventory: true,
+      can_view_orders: true,
+      can_submit_reports: true,
+      can_view_reports: true,
+    };
+  }
+
+  return {
+    can_view_inventory: true,
+    can_submit_reports: true,
+  };
+}
+
+function mergePermissionMaps(...maps: Array<Record<string, boolean> | null>): Record<string, boolean> | null {
+  const merged = maps.reduce<Record<string, boolean>>((acc, map) => {
+    if (!map) return acc;
+    Object.assign(acc, map);
+    return acc;
+  }, {});
+
+  return Object.keys(merged).length > 0 ? merged : null;
+}
+
 export const authenticate = async (
   req: AuthRequest,
   res: Response,
@@ -34,11 +101,32 @@ export const authenticate = async (
       return res.status(401).json({ error: "Invalid or expired token" });
     }
 
-    const { data: profile, error: profileError } = await supabase
-      .from("user_profiles")
-      .select("id, full_name, role, is_active, avatar_color")
-      .eq("id", user.id)
-      .maybeSingle();
+    const profileSelectVariants = [
+      "id, full_name, role, is_active, avatar_color, permissions",
+      "id, full_name, role, is_active, avatar_color",
+    ];
+
+    let profile: any = null;
+    let profileError: any = null;
+
+    for (const selectQuery of profileSelectVariants) {
+      const { data, error } = await supabase
+        .from("user_profiles")
+        .select(selectQuery)
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (!error) {
+        profile = data;
+        profileError = null;
+        break;
+      }
+
+      profileError = error;
+      if (!isSchemaCompatibilityError(error)) {
+        break;
+      }
+    }
 
     if (profileError) {
       logger.error("Profile lookup failed", { error: profileError.message });
@@ -49,27 +137,50 @@ export const authenticate = async (
       return res.status(403).json({ error: "This account is disabled" });
     }
 
-    const { data: membership } = await supabase
-      .from("team_members")
-      .select("team_id, role")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
+    const normalizedRole = normalizeRole(profile?.role);
+    const profilePermissions = coercePermissionMap(profile?.permissions);
+    const hasProfilePermissions = Object.keys(profilePermissions).length > 0;
 
-    let permissions: Record<string, boolean> | null = null;
-    if (membership?.team_id) {
-      const { data: teamPermissions } = await supabase
-        .from("team_permissions")
-        .select("*")
-        .eq("team_id", membership.team_id)
+    let teamPermissions: Record<string, boolean> | null = null;
+    if (normalizedRole !== "admin" && !hasProfilePermissions) {
+      const { data: membership, error: membershipError } = await supabase
+        .from("team_members")
+        .select("team_id, role")
+        .eq("user_id", user.id)
+        .limit(1)
         .maybeSingle();
-      permissions = (teamPermissions as Record<string, boolean>) || null;
+
+      if (membershipError && !isSchemaCompatibilityError(membershipError)) {
+        logger.error("Team membership lookup failed", { error: membershipError.message });
+        return res.status(500).json({ error: "Failed to load user team membership" });
+      }
+
+      if (membership?.team_id) {
+        const { data: rawTeamPermissions, error: teamPermissionsError } = await supabase
+          .from("team_permissions")
+          .select("*")
+          .eq("team_id", membership.team_id)
+          .maybeSingle();
+
+        if (teamPermissionsError && !isSchemaCompatibilityError(teamPermissionsError)) {
+          logger.error("Team permissions lookup failed", { error: teamPermissionsError.message });
+          return res.status(500).json({ error: "Failed to load team permissions" });
+        }
+
+        teamPermissions = coercePermissionMap(rawTeamPermissions);
+      }
+    }
+
+    const roleFallbackPermissions = buildRoleFallbackPermissions(normalizedRole);
+    const permissions = mergePermissionMaps(profilePermissions, teamPermissions, roleFallbackPermissions);
+    if (permissions?.can_adjust_inventory && permissions.can_edit_inventory === undefined) {
+      permissions.can_edit_inventory = true;
     }
 
     req.user = {
       id: user.id,
       email: user.email,
-      role: normalizeRole(profile?.role),
+      role: normalizedRole,
       profile,
       permissions,
     };

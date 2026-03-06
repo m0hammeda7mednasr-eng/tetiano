@@ -177,13 +177,22 @@ router.post(
     try {
       const { brandId } = req.params;
 
-      const { data: brand } = await supabase
+      const { data: brand, error: brandError } = await supabase
         .from('brands')
         .select(
           'name, shopify_domain, shopify_location_id, shopify_access_token, access_token',
         )
         .eq('id', brandId)
-        .single();
+        .maybeSingle();
+
+      if (brandError) {
+        logger.error('Sync brand lookup failed', {
+          brandId,
+          error: brandError.message,
+          code: brandError.code,
+        });
+        return res.status(500).json({ error: 'Failed to load brand data' });
+      }
 
       if (!brand) {
         return res.status(404).json({ error: 'Brand not found' });

@@ -22,6 +22,17 @@ function resolveBackendBaseUrl(): string {
 
 const BACKEND_BASE_URL = resolveBackendBaseUrl();
 
+function isSchemaCompatibilityError(error: any): boolean {
+  const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    text.includes("column") ||
+    text.includes("relation") ||
+    text.includes("does not exist") ||
+    text.includes("schema cache") ||
+    text.includes("unknown relationship")
+  );
+}
+
 async function getUserSnapshot(userId: string) {
   const { data: profile } = await supabase
     .from("user_profiles")
@@ -84,10 +95,8 @@ router.get(
   requireRole("admin"),
   async (req: AuthRequest, res: Response) => {
     try {
-      const { data: users, error } = await supabase
-        .from("user_profiles")
-        .select(
-          `
+      const userSelectVariants = [
+        `
         id, full_name, role, is_active, avatar_color, created_at,
         team_members (
           team_id,
@@ -95,24 +104,67 @@ router.get(
           teams ( id, name, color )
         )
       `,
+        `
+        id, full_name, role, is_active, created_at,
+        team_members (
+          team_id,
+          role,
+          teams ( id, name, color )
         )
-        .order("created_at", { ascending: false });
+      `,
+        `id, full_name, role, is_active, created_at`,
+      ];
 
-      if (error) throw error;
+      let users: any[] = [];
+      let usersError: any = null;
 
-      // Get emails from auth.users (admin-only view)
-      const { data: authUsers } = await supabase.auth.admin.listUsers();
-      const emailMap = new Map(
-        authUsers?.users?.map((u) => [u.id, u.email]) ?? [],
-      );
+      for (const selectQuery of userSelectVariants) {
+        const { data, error } = await supabase
+          .from("user_profiles")
+          .select(selectQuery)
+          .order("created_at", { ascending: false });
 
-      const result = users?.map((u) => ({
+        if (!error) {
+          users = data || [];
+          usersError = null;
+          break;
+        }
+
+        usersError = error;
+        if (!isSchemaCompatibilityError(error)) {
+          break;
+        }
+      }
+
+      if (usersError) throw usersError;
+
+      const emailMap = new Map<string, string>();
+      try {
+        const { data: authUsers, error: authUsersError } = await supabase.auth.admin.listUsers();
+        if (authUsersError) {
+          throw authUsersError;
+        }
+        for (const authUser of authUsers?.users || []) {
+          emailMap.set(authUser.id, authUser.email || "");
+        }
+      } catch (emailError: any) {
+        logger.warn("Admin: unable to fetch auth emails, continuing without them", {
+          error: emailError?.message,
+        });
+      }
+
+      const result = users.map((u) => ({
         ...u,
         email: emailMap.get(u.id) || "",
       }));
       res.json({ users: result });
     } catch (err: any) {
-      logger.error("Admin: list users error", { error: err.message });
+      logger.error("Admin: list users error", {
+        error: err.message,
+        details: err.details,
+        hint: err.hint,
+        code: err.code,
+      });
       res.status(500).json({ error: err.message });
     }
   },
@@ -352,21 +404,69 @@ router.get(
   requireRole("admin", "manager"),
   async (req: AuthRequest, res: Response) => {
     try {
-      const { data: teams, error } = await supabase
-        .from("teams")
-        .select(
-          `
+      const variants: Array<{ select: string; activeOnly: boolean }> = [
+        {
+          select: `
         *,
         team_members ( user_id, role ),
         team_permissions ( * )
       `,
-        )
-        .eq("is_active", true)
-        .order("created_at", { ascending: false });
+          activeOnly: true,
+        },
+        {
+          select: `
+        *,
+        team_members ( user_id, role )
+      `,
+          activeOnly: true,
+        },
+        {
+          select: `
+        *,
+        team_members ( user_id, role )
+      `,
+          activeOnly: false,
+        },
+        {
+          select: `*`,
+          activeOnly: false,
+        },
+      ];
 
-      if (error) throw error;
+      let teams: any[] = [];
+      let teamsError: any = null;
+
+      for (const variant of variants) {
+        let query = supabase.from("teams").select(variant.select);
+        if (variant.activeOnly) {
+          query = query.eq("is_active", true);
+        }
+
+        const { data, error } = await query.order("created_at", { ascending: false });
+        if (!error) {
+          teams = (data || []).map((team: any) => ({
+            ...team,
+            team_permissions: team.team_permissions ?? null,
+          }));
+          teamsError = null;
+          break;
+        }
+
+        teamsError = error;
+        if (!isSchemaCompatibilityError(error)) {
+          break;
+        }
+      }
+
+      if (teamsError) throw teamsError;
       res.json({ teams });
     } catch (err: any) {
+      logger.error("Admin: list teams error", {
+        error: err.message,
+        details: err.details,
+        hint: err.hint,
+        code: err.code,
+      });
       res.status(500).json({ error: err.message });
     }
   },
@@ -557,41 +657,95 @@ router.get(
     const targetDate = date || new Date().toISOString().slice(0, 10);
 
     try {
-      let q = supabase
-        .from("daily_reports")
-        .select(
-          `
-        *,
-        user_profiles ( id, full_name, role, avatar_color ),
-        teams ( id, name, color )
-      `,
-        )
-        .gte("created_at", `${targetDate}T00:00:00`)
-        .lte("created_at", `${targetDate}T23:59:59`)
-        .order("created_at", { ascending: false });
+      const reportQueryVariants: Array<{ select: string; applyTeamFilter: boolean }> = [
+        {
+          select: `
+            *,
+            user_profiles ( id, full_name, role, avatar_color ),
+            teams ( id, name, color )
+          `,
+          applyTeamFilter: true,
+        },
+        {
+          select: `
+            *,
+            user_profiles ( id, full_name, role, avatar_color )
+          `,
+          applyTeamFilter: true,
+        },
+        { select: "*", applyTeamFilter: true },
+        { select: "*", applyTeamFilter: false },
+      ];
 
-      if (team_id) q = q.eq("team_id", team_id);
+      let reports: any[] = [];
+      let reportsError: any = null;
+      let teamFilterApplied = false;
 
-      const { data: reports, error } = await q;
-      if (error) throw error;
+      for (const variant of reportQueryVariants) {
+        let q = supabase
+          .from("daily_reports")
+          .select(variant.select)
+          .gte("created_at", `${targetDate}T00:00:00`)
+          .lte("created_at", `${targetDate}T23:59:59`)
+          .order("created_at", { ascending: false });
+
+        if (team_id && variant.applyTeamFilter) {
+          q = q.eq("team_id", team_id);
+        }
+
+        const { data, error } = await q;
+        if (!error) {
+          reports = data || [];
+          reportsError = null;
+          teamFilterApplied = Boolean(team_id && variant.applyTeamFilter);
+          break;
+        }
+
+        reportsError = error;
+        if (!isSchemaCompatibilityError(error)) {
+          break;
+        }
+      }
+
+      if (reportsError) {
+        throw reportsError;
+      }
 
       // Fetch all users to find who has NOT submitted
-      const { data: allUsers } = await supabase
+      const { data: allUsers, error: allUsersError } = await supabase
         .from("user_profiles")
         .select("id, full_name, role, avatar_color")
         .eq("is_active", true)
         .neq("role", "admin");
+      if (allUsersError) {
+        throw allUsersError;
+      }
 
       const submittedIds = new Set(reports?.map((r) => r.user_id));
       const missing = allUsers?.filter((u) => !submittedIds.has(u.id)) || [];
 
       // Summary stats
-      const { data: summary } = await supabase
+      const { data: summary, error: summaryError } = await supabase
         .from("team_report_summary")
         .select("*");
+      if (summaryError && !isSchemaCompatibilityError(summaryError)) {
+        throw summaryError;
+      }
 
-      res.json({ reports, missing, summary, date: targetDate });
+      res.json({
+        reports,
+        missing,
+        summary: summaryError ? [] : summary,
+        date: targetDate,
+        team_filter_applied: teamFilterApplied,
+      });
     } catch (err: any) {
+      logger.error("Admin: reports error", {
+        error: err.message,
+        details: err.details,
+        hint: err.hint,
+        code: err.code,
+      });
       res.status(500).json({ error: err.message });
     }
   },

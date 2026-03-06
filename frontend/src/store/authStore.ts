@@ -5,9 +5,10 @@ import { supabase } from "../lib/supabase";
 export interface UserProfile {
   id: string;
   full_name: string;
-  role: "admin" | "manager" | "staff";
+  role: "admin" | "manager" | "staff" | "owner" | "operator" | "user" | "viewer";
   is_active: boolean;
   avatar_color: string;
+  permissions?: string[] | Record<string, boolean> | null;
   team_members?: {
     team_id: string;
     role: string;
@@ -168,6 +169,7 @@ async function fetchAndSetProfile(
 ) {
   try {
     const profile = await getProfileWithRetry(user.id);
+    const normalizedRole = normalizeRole(profile?.role);
 
     const { data: memberships, error: membershipError } = await supabase
       .from("team_members")
@@ -181,38 +183,61 @@ async function fetchAndSetProfile(
       .eq("user_id", user.id)
       .limit(1);
 
-    if (membershipError) {
+    if (membershipError && !isSchemaCompatibilityError(membershipError)) {
       throw membershipError;
     }
 
-    let perms: Record<string, boolean> | null = null;
-    if (memberships?.[0]?.team_id) {
-      const { data: teamPermissions } = await supabase
+    const safeMemberships = membershipError ? [] : memberships || [];
+
+    const profilePermissions = toPermissionMap(profile?.permissions);
+    let teamPermissions: Record<string, boolean> | null = null;
+
+    if (normalizedRole !== "admin" && !profilePermissions && safeMemberships?.[0]?.team_id) {
+      const { data, error: teamPermissionsError } = await supabase
         .from("team_permissions")
         .select("*")
-        .eq("team_id", memberships[0].team_id)
+        .eq("team_id", safeMemberships[0].team_id)
         .maybeSingle();
-      perms = (teamPermissions as Record<string, boolean>) || null;
+
+      if (teamPermissionsError && !isSchemaCompatibilityError(teamPermissionsError)) {
+        throw teamPermissionsError;
+      }
+
+      if (!teamPermissionsError) {
+        teamPermissions = toPermissionMap(data);
+      }
+    }
+
+    const perms = mergePermissionMaps(
+      profilePermissions,
+      teamPermissions,
+      buildRoleFallbackPermissions(normalizedRole),
+    );
+
+    if (perms?.can_adjust_inventory && perms.can_edit_inventory === undefined) {
+      perms.can_edit_inventory = true;
     }
 
     const mergedProfile: UserProfile | null = profile
       ? {
           ...(profile as UserProfile),
           team_members:
-            memberships?.map((m: any) => ({
+            safeMemberships.map((m: any) => ({
               team_id: m.team_id,
               role: m.role,
               teams: normalizeTeam(m.teams),
               team_permissions: perms,
-            })) || [],
+            })),
         }
       : null;
 
     // If a super admin email is configured, ensure this account is admin.
     const superAdminEmail = import.meta.env.VITE_SUPER_ADMIN_EMAIL;
     const shouldForceAdmin = !!superAdminEmail && user.email === superAdminEmail;
+    const effectiveRole =
+      shouldForceAdmin || normalizedRole === "admin" ? "admin" : normalizedRole;
 
-    if (shouldForceAdmin && mergedProfile && mergedProfile.role !== "admin") {
+    if (shouldForceAdmin && mergedProfile && effectiveRole === "admin" && mergedProfile.role !== "admin") {
       await supabase
         .from("user_profiles")
         .update({ role: "admin" })
@@ -224,9 +249,8 @@ async function fetchAndSetProfile(
       user,
       profile: mergedProfile,
       loading: false,
-      isAdmin: mergedProfile?.role === "admin" || shouldForceAdmin,
-      isManager:
-        mergedProfile?.role === "manager" || mergedProfile?.role === "admin",
+      isAdmin: effectiveRole === "admin",
+      isManager: effectiveRole === "manager" || effectiveRole === "admin",
       permissions: perms,
     });
   } catch (err) {
@@ -243,15 +267,36 @@ async function fetchAndSetProfile(
 }
 
 async function getProfileWithRetry(userId: string, retries = 6, delayMs = 300) {
-  for (let attempt = 0; attempt < retries; attempt += 1) {
-    const { data, error } = await supabase
-      .from("user_profiles")
-      .select("id, full_name, role, is_active, avatar_color")
-      .eq("id", userId)
-      .maybeSingle();
+  const profileSelectVariants = [
+    "id, full_name, role, is_active, avatar_color, permissions",
+    "id, full_name, role, is_active, avatar_color",
+  ];
 
-    if (!error && data) {
-      return data;
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    let profileData: any = null;
+    let profileError: any = null;
+
+    for (const selectQuery of profileSelectVariants) {
+      const { data, error } = await supabase
+        .from("user_profiles")
+        .select(selectQuery)
+        .eq("id", userId)
+        .maybeSingle();
+
+      if (!error) {
+        profileData = data;
+        profileError = null;
+        break;
+      }
+
+      profileError = error;
+      if (!isSchemaCompatibilityError(error)) {
+        break;
+      }
+    }
+
+    if (!profileError && profileData) {
+      return profileData;
     }
 
     if (attempt < retries - 1) {
@@ -268,6 +313,82 @@ function normalizeTeam(teamValue: any) {
     return teamValue[0] || null;
   }
   return teamValue;
+}
+
+function isSchemaCompatibilityError(error: any): boolean {
+  const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    text.includes("column") ||
+    text.includes("relation") ||
+    text.includes("does not exist") ||
+    text.includes("schema cache") ||
+    text.includes("unknown relationship")
+  );
+}
+
+function normalizeRole(role: unknown): "admin" | "manager" | "staff" {
+  const value = typeof role === "string" ? role.toLowerCase() : "";
+  if (value === "admin" || value === "owner") return "admin";
+  if (value === "manager") return "manager";
+  return "staff";
+}
+
+function toPermissionMap(value: unknown): Record<string, boolean> | null {
+  if (Array.isArray(value)) {
+    const mapped = value.reduce<Record<string, boolean>>((acc, permission) => {
+      if (typeof permission === "string" && permission.trim()) {
+        acc[permission.trim()] = true;
+      }
+      return acc;
+    }, {});
+    return Object.keys(mapped).length > 0 ? mapped : null;
+  }
+
+  if (value && typeof value === "object") {
+    const mapped = Object.entries(value as Record<string, unknown>).reduce<Record<string, boolean>>(
+      (acc, [key, raw]) => {
+        if (typeof raw === "boolean") {
+          acc[key] = raw;
+        }
+        return acc;
+      },
+      {},
+    );
+    return Object.keys(mapped).length > 0 ? mapped : null;
+  }
+
+  return null;
+}
+
+function buildRoleFallbackPermissions(role: "admin" | "manager" | "staff"): Record<string, boolean> | null {
+  if (role === "admin") return null;
+
+  if (role === "manager") {
+    return {
+      can_view_inventory: true,
+      can_edit_inventory: true,
+      can_view_orders: true,
+      can_submit_reports: true,
+      can_view_reports: true,
+    };
+  }
+
+  return {
+    can_view_inventory: true,
+    can_submit_reports: true,
+  };
+}
+
+function mergePermissionMaps(
+  ...maps: Array<Record<string, boolean> | null>
+): Record<string, boolean> | null {
+  const merged = maps.reduce<Record<string, boolean>>((acc, map) => {
+    if (!map) return acc;
+    Object.assign(acc, map);
+    return acc;
+  }, {});
+
+  return Object.keys(merged).length > 0 ? merged : null;
 }
 
 function randomProfileColor() {

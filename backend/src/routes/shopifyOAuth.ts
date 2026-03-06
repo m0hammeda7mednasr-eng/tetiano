@@ -52,6 +52,8 @@ const WEBHOOK_TOPICS = [
   "inventory_levels/update",
 ];
 
+const inMemoryOAuthStates = new Map<string, OAuthStateRecord>();
+
 type OAuthStateRecord = {
   state: string;
   shop: string;
@@ -158,8 +160,28 @@ function verifyCallbackHmac(query: Request["query"], secret: string, receivedHma
 }
 
 function isSchemaMismatchError(error: any): boolean {
-  const text = `${error?.message || ""} ${error?.details || ""}`.toLowerCase();
-  return text.includes("column") || text.includes("null value");
+  const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    text.includes("column") ||
+    text.includes("null value") ||
+    text.includes("relation") ||
+    text.includes("does not exist") ||
+    text.includes("schema cache") ||
+    text.includes("unknown relationship")
+  );
+}
+
+function isSupabaseAccessError(error: any): boolean {
+  const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    text.includes("jwt") ||
+    text.includes("auth") ||
+    text.includes("permission denied") ||
+    text.includes("row-level security") ||
+    text.includes("not authenticated") ||
+    text.includes("invalid api key") ||
+    text.includes("service_role")
+  );
 }
 
 function isStateExpired(stateRow: OAuthStateRecord): boolean {
@@ -230,12 +252,50 @@ async function persistOAuthState(params: {
     }
   }
 
+  if (isSchemaMismatchError(lastError)) {
+    inMemoryOAuthStates.set(params.state, {
+      state: params.state,
+      shop: params.shop,
+      brand_id: params.brandId || null,
+      user_id: params.userId || null,
+      api_key: params.apiKey,
+      api_secret: params.apiSecret,
+      created_at: new Date().toISOString(),
+      expires_at: expiresAt,
+    });
+    logger.warn("Using in-memory OAuth state fallback", {
+      reason: lastError?.message,
+      state: params.state,
+      shop: params.shop,
+    });
+    return;
+  }
+
   throw lastError || new Error("Failed to persist OAuth state");
 }
 
 async function findBrandById(brandId: string) {
   const { data, error } = await supabase.from("brands").select("*").eq("id", brandId).maybeSingle();
   if (error) {
+    throw error;
+  }
+  return data;
+}
+
+async function findBrandByOptionalColumn(column: string, value: string) {
+  if (!value) {
+    return null;
+  }
+
+  const { data, error } = await supabase.from("brands").select("*").eq(column, value).maybeSingle();
+  if (error) {
+    if (isSchemaMismatchError(error)) {
+      logger.warn("Skipping optional brand lookup because schema is missing expected column", {
+        column,
+        error: error.message,
+      });
+      return null;
+    }
     throw error;
   }
   return data;
@@ -352,26 +412,12 @@ async function resolveBrandForOAuth(stateRow: OAuthStateRecord, shopDomain: stri
   }
 
   if (stateRow.api_key) {
-    const { data: byApiKey, error: byApiKeyError } = await supabase
-      .from("brands")
-      .select("*")
-      .eq("api_key", stateRow.api_key)
-      .maybeSingle();
-    if (byApiKeyError) {
-      throw byApiKeyError;
-    }
+    const byApiKey = await findBrandByOptionalColumn("api_key", stateRow.api_key);
     if (byApiKey) {
       return byApiKey;
     }
 
-    const { data: byShopifyApiKey, error: byShopifyApiKeyError } = await supabase
-      .from("brands")
-      .select("*")
-      .eq("shopify_api_key", stateRow.api_key)
-      .maybeSingle();
-    if (byShopifyApiKeyError) {
-      throw byShopifyApiKeyError;
-    }
+    const byShopifyApiKey = await findBrandByOptionalColumn("shopify_api_key", stateRow.api_key);
     if (byShopifyApiKey) {
       return byShopifyApiKey;
     }
@@ -525,10 +571,23 @@ async function consumeOAuthState(stateToken: string): Promise<OAuthStateRecord> 
     .eq("state", stateToken)
     .maybeSingle();
 
-  if (error) {
+  if (error && !isSchemaMismatchError(error)) {
     throw error;
   }
   if (!data) {
+    const fallback = inMemoryOAuthStates.get(stateToken);
+    if (fallback) {
+      return fallback;
+    }
+
+    if (error && isSchemaMismatchError(error)) {
+      throw new HttpError(
+        503,
+        "oauth_state_storage_unavailable",
+        "OAuth state storage is not ready. Apply database migrations and retry.",
+      );
+    }
+
     throw new HttpError(400, "invalid_state", "Invalid OAuth state");
   }
 
@@ -536,7 +595,11 @@ async function consumeOAuthState(stateToken: string): Promise<OAuthStateRecord> 
 }
 
 async function deleteOAuthState(stateToken: string) {
-  await supabase.from("shopify_oauth_states").delete().eq("state", stateToken);
+  inMemoryOAuthStates.delete(stateToken);
+  const { error } = await supabase.from("shopify_oauth_states").delete().eq("state", stateToken);
+  if (error && !isSchemaMismatchError(error)) {
+    logger.warn("Failed to delete OAuth state row", { stateToken, error: error.message });
+  }
 }
 
 async function completeOAuthCallback(params: {
@@ -744,26 +807,12 @@ router.post("/get-install-url", authenticate, async (req: AuthRequest, res: Resp
       brand = byShop;
 
       if (!brand) {
-        const { data: byApiKey, error: byApiKeyError } = await supabase
-          .from("brands")
-          .select("*")
-          .eq("api_key", apiKey)
-          .maybeSingle();
-        if (byApiKeyError) {
-          throw byApiKeyError;
-        }
+        const byApiKey = await findBrandByOptionalColumn("api_key", apiKey);
         brand = byApiKey;
       }
 
       if (!brand) {
-        const { data: byShopifyApiKey, error: byShopifyApiKeyError } = await supabase
-          .from("brands")
-          .select("*")
-          .eq("shopify_api_key", apiKey)
-          .maybeSingle();
-        if (byShopifyApiKeyError) {
-          throw byShopifyApiKeyError;
-        }
+        const byShopifyApiKey = await findBrandByOptionalColumn("shopify_api_key", apiKey);
         brand = byShopifyApiKey;
       }
 
@@ -805,9 +854,24 @@ router.post("/get-install-url", authenticate, async (req: AuthRequest, res: Resp
       brandId: brand.id,
     });
   } catch (error: any) {
-    const status = error instanceof HttpError ? error.status : 500;
-    const message = error instanceof HttpError ? error.message : "Failed to generate install URL";
-    logger.error("get-install-url failed", { error: error.message });
+    const schemaMismatch = isSchemaMismatchError(error);
+    const supabaseAccessError = isSupabaseAccessError(error);
+    const status =
+      error instanceof HttpError ? error.status : schemaMismatch || supabaseAccessError ? 503 : 500;
+    const message =
+      error instanceof HttpError
+        ? error.message
+        : schemaMismatch
+          ? "Database schema is missing required Shopify OAuth tables/columns. Run latest migrations."
+          : supabaseAccessError
+            ? "Backend cannot access Supabase. Verify SUPABASE_SERVICE_KEY / SUPABASE_SERVICE_ROLE_KEY in Railway."
+          : "Failed to generate install URL";
+    logger.error("get-install-url failed", {
+      error: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code,
+    });
     res.status(status).json({ error: message });
   }
 });
