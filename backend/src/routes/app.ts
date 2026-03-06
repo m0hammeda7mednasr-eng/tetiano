@@ -185,7 +185,17 @@ function canViewFinance(req: AuthRequest): boolean {
 
 async function requestLegacyInstallUrl(req: AuthRequest, payload: Record<string, unknown>) {
   const authHeader = String(req.headers.authorization || "");
-  const response = await axios.post(`${resolveBackendUrl(req)}/api/shopify/get-install-url`, payload, {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "")
+    .split(",")[0]
+    .trim();
+  const forwardedHost = String(req.headers["x-forwarded-host"] || "")
+    .split(",")[0]
+    .trim();
+  const host = forwardedHost || req.get("host") || "";
+  const protocol = forwardedProto || (host.includes("localhost") ? "http" : "https");
+  const requestBaseUrl = host ? `${protocol}://${host}` : resolveBackendUrl(req);
+
+  const response = await axios.post(`${requestBaseUrl}/api/shopify/get-install-url`, payload, {
     headers: {
       Authorization: authHeader,
       "Content-Type": "application/json",
@@ -1196,7 +1206,7 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
     return res.status(400).json({ error: "Invalid Shopify domain" });
   }
 
-  // Prefer the dedicated OAuth route (more resilient to schema mismatches).
+  // Use the dedicated OAuth route (more resilient to schema mismatches).
   try {
     const legacy = await requestLegacyInstallUrl(req, {
       shop: shopDomain,
@@ -1213,83 +1223,16 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
     });
   } catch (bridgeError: any) {
     const status = Number(bridgeError?.status || 0);
-
-    // Propagate business errors from legacy route as-is.
-    if (status >= 400 && status !== 404 && status !== 502) {
-      return res.status(status).json({ error: bridgeError?.message || "Failed to start Shopify OAuth flow" });
-    }
-
-    logger.warn("App shopify connect legacy bridge failed, falling back to app route logic", {
+    const responseStatus = status >= 400 ? status : 502;
+    const message = bridgeError?.message || "Failed to start Shopify OAuth flow";
+    logger.error("App shopify connect bridge failed", {
       status: bridgeError?.status,
       code: bridgeError?.code,
       error: bridgeError?.message,
       storeId,
       shopDomain,
     });
-  }
-
-  try {
-    await upsertLegacyBrandForStore({
-      storeId,
-      shopDomain,
-      apiKey,
-      apiSecret,
-    });
-
-    const state = crypto.randomBytes(32).toString("hex");
-    let stateInsert = await supabase.from("shopify_oauth_states").insert({
-      state,
-      shop: shopDomain,
-      brand_id: storeId,
-      user_id: req.user?.id || null,
-      api_key: apiKey,
-      api_secret: apiSecret,
-      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-    });
-    if (stateInsert.error && isSchemaCompatibilityError(stateInsert.error)) {
-      stateInsert = await supabase.from("shopify_oauth_states").insert({
-        state,
-        shop: shopDomain,
-        user_id: req.user?.id || null,
-        api_key: apiKey,
-        api_secret: apiSecret,
-      });
-    }
-    if (stateInsert.error && isSchemaCompatibilityError(stateInsert.error)) {
-      stateInsert = await supabase.from("shopify_oauth_states").insert({
-        state,
-        shop: shopDomain,
-      });
-    }
-    if (stateInsert.error) throw stateInsert.error;
-
-    const connectionInsert = await supabase.from("shopify_connections").upsert(
-      {
-        store_id: storeId,
-        shop_domain: shopDomain,
-        access_token_encrypted: "",
-        scopes: SHOPIFY_SCOPES,
-        status: "disconnected",
-        updated_at: nowIso(),
-      },
-      { onConflict: "store_id" },
-    );
-    if (connectionInsert.error && !isSchemaCompatibilityError(connectionInsert.error)) {
-      throw connectionInsert.error;
-    }
-
-    const redirectUri = `${resolveBackendUrl(req)}/api/shopify/callback`;
-    const installUrl =
-      `https://${shopDomain}/admin/oauth/authorize?` +
-      `client_id=${encodeURIComponent(apiKey)}&` +
-      `scope=${encodeURIComponent(SHOPIFY_SCOPES)}&` +
-      `redirect_uri=${encodeURIComponent(redirectUri)}&` +
-      `state=${encodeURIComponent(state)}`;
-
-    return res.json({ install_url: installUrl, state, shop: shopDomain });
-  } catch (error: any) {
-    logger.error("App shopify connect failed", { error: error?.message });
-    return res.status(500).json({ error: "Failed to start Shopify OAuth flow" });
+    return res.status(responseStatus).json({ error: message });
   }
 });
 
