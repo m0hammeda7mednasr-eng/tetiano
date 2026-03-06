@@ -1,9 +1,26 @@
 # 📚 فهرس الوثائق - Documentation Index
 
-## 🎯 ابدأ من هنا
+**آخر تحديث**: 6 مارس 2026  
+**الحالة**: ✅ محدّث مع حلول 500 errors
+
+---
+
+## 🚨 ابدأ هنا - حل المشاكل الحالية (أولوية)
+
+### إذا كان لديك 500 Errors:
+1. **[FIX_500_ERRORS_NOW.md](FIX_500_ERRORS_NOW.md)** ⚡ - حل سريع (10 دقائق)
+2. **[RAILWAY_ENV_CHECK.md](RAILWAY_ENV_CHECK.md)** - فحص Railway variables خطوة بخطوة
+3. **[CURRENT_SITUATION_ANALYSIS.md](CURRENT_SITUATION_ANALYSIS.md)** - تحليل شامل للوضع
+
+### دليل Environment Variables:
+4. **[ENVIRONMENT_VARIABLES_GUIDE.md](ENVIRONMENT_VARIABLES_GUIDE.md)** ⭐ - دليل شامل لجميع المتغيرات
+
+---
+
+## 🎯 ابدأ من هنا (للمبتدئين)
 
 ### للمبتدئين:
-1. **START_HERE_AR.md** 🌟
+1. **[START_HERE_AR.md](START_HERE_AR.md)** 🌟
    - دليل سريع للبدء
    - نظرة عامة على المشروع
    - الخطوات التالية
@@ -15,10 +32,10 @@
 
 ---
 
-## 📖 الوثائق الأساسية
+## � الوثائق الأساسية
 
 ### فهم المشروع:
-3. **COMPLETE_SYSTEM_OVERVIEW.md** ⭐
+3. **[COMPLETE_SYSTEM_OVERVIEW.md](COMPLETE_SYSTEM_OVERVIEW.md)** ⭐
    - نظرة شاملة على النظام
    - التقنيات المستخدمة
    - البنية المعمارية
@@ -26,7 +43,7 @@
    - الأمان
    - الأداء
 
-4. **PROJECT_ARCHITECTURE_REVIEW.md** ⭐
+4. **[PROJECT_ARCHITECTURE_REVIEW.md](PROJECT_ARCHITECTURE_REVIEW.md)** ⭐
    - مراجعة البنية المعمارية
    - قاعدة البيانات
    - نظام الصلاحيات
@@ -34,17 +51,17 @@
 
 ---
 
-## 🚀 التنفيذ والتشغيل
+## � التنفيذ والتشغيل
 
 ### الاختبار المحلي:
-5. **LOCAL_TESTING_GUIDE.md** 🧪
+5. **[LOCAL_TESTING_GUIDE.md](LOCAL_TESTING_GUIDE.md)** 🧪
    - خطوات التشغيل المحلي
    - سيناريوهات الاختبار
    - حل المشاكل الشائعة
    - Checklist الاختبار
 
 ### خطة العمل:
-6. **ACTION_PLAN.md** 📋
+6. **[ACTION_PLAN.md](ACTION_PLAN.md)** 📋
    - خطة العمل خطوة بخطوة
    - إصلاح Database
    - إصلاح Backend (Railway)
@@ -56,13 +73,13 @@
 ## 🗄️ قاعدة البيانات
 
 ### إعداد Database:
-7. **QUICK_DATABASE_SETUP.sql** ⚡
+7. **[QUICK_DATABASE_SETUP.sql](QUICK_DATABASE_SETUP.sql)** ⚡
    - إعداد سريع لقاعدة البيانات
    - Trigger Functions
    - RLS Policies
    - التحقق من النتائج
 
-8. **COMPLETE_FIX.sql**
+8. **[COMPLETE_FIX.sql](COMPLETE_FIX.sql)**
    - إصلاح شامل للـ Database
    - تحديث Roles
    - Safety Net
@@ -77,7 +94,8 @@ supabase/migrations/
 ├── 005_shopify_oauth.sql        - OAuth
 ├── 007_brands_api_creds.sql     - بيانات العلامات
 ├── 008_simplified_rbac.sql      - نظام الصلاحيات
-└── 010_force_admin_on_signup.sql - أول مستخدم أدمن
+├── 010_force_admin_on_signup.sql - أول مستخدم أدمن
+└── 014_fix_team_permissions.sql - إصلاح team_permissions
 ```
 
 ---
@@ -85,14 +103,14 @@ supabase/migrations/
 ## 🚢 Deployment
 
 ### Railway (Backend):
-9. **RAILWAY_DEPLOYMENT_GUIDE.md** 🚂
+9. **[RAILWAY_SETUP_FINAL.md](RAILWAY_SETUP_FINAL.md)** 🚂
    - دليل نشر Backend على Railway
    - إعدادات المشروع
    - Environment Variables
    - حل المشاكل
 
 ### Vercel (Frontend):
-10. **VERCEL_DEPLOYMENT_GUIDE.md** 🌐
+10. **[VERCEL_DEPLOYMENT_GUIDE.md](VERCEL_DEPLOYMENT_GUIDE.md)** 🌐
     - دليل نشر Frontend على Vercel
     - إعدادات المشروع
     - Environment Variables
@@ -100,41 +118,51 @@ supabase/migrations/
 
 ---
 
+## 🔗 Shopify Integration
+
+### الإعداد:
+11. **[SHOPIFY_OAUTH_SETUP.md](SHOPIFY_OAUTH_SETUP.md)** ⭐
+    - دليل ربط Shopify عبر OAuth
+    - خطوات إنشاء Shopify App
+    - تكوين الصلاحيات
+    - Redirect URI Setup
+
+12. **[docs/shopify-oauth-setup.md](docs/shopify-oauth-setup.md)**
+    - تفاصيل OAuth Flow
+    - Webhook Configuration
+    - Testing
+
+---
+
 ## 📚 الوثائق التفصيلية
 
 ### في مجلد docs/:
 
-11. **docs/api.md**
+13. **[docs/api.md](docs/api.md)**
     - توثيق API كامل
     - جميع Endpoints
     - Request/Response Examples
     - Authentication
 
-12. **docs/architecture.md**
+14. **[docs/architecture.md](docs/architecture.md)**
     - البنية المعمارية التفصيلية
     - Data Flow
     - System Diagrams
     - Design Decisions
 
-13. **docs/deployment.md**
+15. **[docs/deployment.md](docs/deployment.md)**
     - دليل النشر الشامل
     - Production Setup
     - Environment Configuration
     - Monitoring
 
-14. **docs/features.md**
+16. **[docs/features.md](docs/features.md)**
     - الميزات التفصيلية
     - User Stories
     - Screenshots
     - Use Cases
 
-15. **docs/shopify-oauth-setup.md**
-    - إعداد Shopify OAuth
-    - Creating Shopify Apps
-    - Webhook Configuration
-    - Testing
-
-16. **docs/troubleshooting.md**
+17. **[docs/troubleshooting.md](docs/troubleshooting.md)**
     - حل المشاكل الشائعة
     - Error Messages
     - Debug Tips
@@ -142,52 +170,66 @@ supabase/migrations/
 
 ---
 
-## 📝 ملفات إضافية
+## 🔧 استكشاف الأخطاء
 
-### Setup & Configuration:
-17. **SETUP.md**
-    - دليل الإعداد الكامل
-    - Prerequisites
-    - Installation Steps
-    - Configuration
+### المشاكل الحالية (أولوية):
+18. **[FIX_500_ERRORS_NOW.md](FIX_500_ERRORS_NOW.md)** ⚡
+    - حل سريع لـ 500 errors
+    - 3 خطوات فقط
+    - 10 دقائق
 
-18. **QUICKSTART.md**
-    - بدء سريع
-    - Minimal Setup
-    - Quick Commands
+19. **[RAILWAY_ENV_CHECK.md](RAILWAY_ENV_CHECK.md)**
+    - فحص Railway variables
+    - خطوة بخطوة
+    - Checklist كامل
 
-### Status & Reports:
-19. **CURRENT_STATUS.md**
+20. **[CURRENT_SITUATION_ANALYSIS.md](CURRENT_SITUATION_ANALYSIS.md)**
+    - تحليل شامل للوضع
+    - الأسباب والحلول
+    - خطة التنفيذ
+
+### الحالة الحالية:
+21. **[CURRENT_STATUS_FINAL.md](CURRENT_STATUS_FINAL.md)**
     - الوضع الحالي للمشروع
     - ما تم إنجازه
     - ما يحتاج إكمال
 
-20. **COMPLETION_SUMMARY.md**
-    - ملخص الإنجاز
-    - Timeline
-    - Achievements
-
-21. **FINAL_PROJECT_STATUS.md**
+22. **[FINAL_PROJECT_STATUS.md](FINAL_PROJECT_STATUS.md)**
     - الحالة النهائية للمشروع
     - Deployment Status
     - Next Steps
 
+23. **[COMPLETION_SUMMARY.md](COMPLETION_SUMMARY.md)**
+    - ملخص الإنجاز
+    - Timeline
+    - Achievements
+
+---
+
+## � ملفات إضافية
+
+### Setup & Configuration:
+24. **[GET_SERVICE_KEY.md](GET_SERVICE_KEY.md)**
+    - الحصول على Supabase Service Key
+    - خطوة بخطوة
+    - Screenshots
+
+25. **[CREATE_ADMIN_USER.md](CREATE_ADMIN_USER.md)**
+    - إنشاء مستخدم Admin
+    - Manual Setup
+    - SQL Commands
+
 ### Guides:
-22. **GITHUB_SECURITY_GUIDE.md**
+26. **[GITHUB_SECURITY_GUIDE.md](GITHUB_SECURITY_GUIDE.md)**
     - دليل أمان GitHub
     - .gitignore Setup
     - Environment Variables
     - Best Practices
 
-23. **PUSH_TO_GITHUB.md**
-    - دليل رفع الكود على GitHub
-    - Git Commands
-    - Repository Setup
-
-24. **CREATE_ADMIN_USER.md**
-    - إنشاء مستخدم Admin
-    - Manual Setup
-    - SQL Commands
+27. **[RAILWAY_FIX.md](RAILWAY_FIX.md)**
+    - إصلاح مشاكل Railway
+    - Common Issues
+    - Solutions
 
 ---
 
@@ -197,13 +239,9 @@ supabase/migrations/
 ```
 QUICK_DATABASE_SETUP.sql      - إعداد سريع ⚡
 COMPLETE_FIX.sql              - إصلاح شامل
-SIMPLE_FIX.sql                - إصلاح بسيط
 FINAL_SETUP.sql               - إعداد نهائي
-QUICK_SETUP.sql               - إعداد سريع
 FIX_DATABASE_NOW.sql          - إصلاح فوري
 ADD_SAMPLE_DATA.sql           - بيانات تجريبية
-MAKE_ALL_ADMINS.sql           - جعل الجميع Admin
-MAKE_ME_ADMIN.sql             - جعلني Admin
 ```
 
 ---
@@ -212,12 +250,9 @@ MAKE_ME_ADMIN.sql             - جعلني Admin
 
 ### Project Files:
 ```
-PROJECT_STRUCTURE.md          - بنية المشروع
-PROJECT_COMPLETION_REPORT.md  - تقرير الإنجاز
 COMPLETE_PROJECT_GUIDE.md     - دليل المشروع الكامل
 IMPLEMENTATION_SUMMARY.md     - ملخص التنفيذ
 EXECUTIVE_SUMMARY.md          - ملخص تنفيذي
-NEW_FILES_GUIDE.md            - دليل الملفات الجديدة
 CHECKLIST.md                  - قائمة التحقق
 INDEX.md                      - الفهرس
 ```
@@ -226,11 +261,18 @@ INDEX.md                      - الفهرس
 
 ## 🎯 كيف تستخدم هذه الوثائق؟
 
+### إذا كان لديك 500 errors (أولوية):
+```
+1. FIX_500_ERRORS_NOW.md          - حل سريع ⚡
+2. RAILWAY_ENV_CHECK.md           - فحص variables
+3. CURRENT_SITUATION_ANALYSIS.md  - تحليل شامل
+```
+
 ### للمبتدئين (أول مرة):
 ```
-1. START_HERE_AR.md           - ابدأ هنا
-2. COMPLETE_SYSTEM_OVERVIEW.md - افهم النظام
-3. LOCAL_TESTING_GUIDE.md     - جرب محلياً
+1. START_HERE_AR.md               - ابدأ هنا
+2. COMPLETE_SYSTEM_OVERVIEW.md    - افهم النظام
+3. LOCAL_TESTING_GUIDE.md         - جرب محلياً
 ```
 
 ### للتطوير:
@@ -242,17 +284,24 @@ INDEX.md                      - الفهرس
 
 ### للـ Deployment:
 ```
-1. ACTION_PLAN.md                 - خطة العمل
+1. ENVIRONMENT_VARIABLES_GUIDE.md - إعداد المتغيرات
 2. QUICK_DATABASE_SETUP.sql       - إعداد Database
-3. RAILWAY_DEPLOYMENT_GUIDE.md    - Backend
+3. RAILWAY_SETUP_FINAL.md         - Backend
 4. VERCEL_DEPLOYMENT_GUIDE.md     - Frontend
+```
+
+### لربط Shopify:
+```
+1. SHOPIFY_OAUTH_SETUP.md         - دليل OAuth
+2. docs/shopify-oauth-setup.md    - تفاصيل
+3. frontend/src/pages/admin/ShopifySettings.tsx - الكود
 ```
 
 ### لحل المشاكل:
 ```
-1. docs/troubleshooting.md        - حل المشاكل
-2. LOCAL_TESTING_GUIDE.md         - اختبار محلي
-3. ACTION_PLAN.md                 - خطة الإصلاح
+1. FIX_500_ERRORS_NOW.md          - 500 errors
+2. docs/troubleshooting.md        - مشاكل عامة
+3. RAILWAY_FIX.md                 - مشاكل Railway
 ```
 
 ---
@@ -261,6 +310,9 @@ INDEX.md                      - الفهرس
 
 ### أريد أن:
 
+#### أحل 500 errors:
+→ `FIX_500_ERRORS_NOW.md` ⚡
+
 #### أفهم المشروع:
 → `COMPLETE_SYSTEM_OVERVIEW.md`
 
@@ -268,7 +320,7 @@ INDEX.md                      - الفهرس
 → `LOCAL_TESTING_GUIDE.md`
 
 #### أنشر على Production:
-→ `ACTION_PLAN.md`
+→ `ENVIRONMENT_VARIABLES_GUIDE.md`
 
 #### أصلح Database:
 → `QUICK_DATABASE_SETUP.sql`
@@ -280,14 +332,23 @@ INDEX.md                      - الفهرس
 → `docs/troubleshooting.md`
 
 #### أعرف الوضع الحالي:
-→ `CURRENT_STATUS.md`
+→ `CURRENT_SITUATION_ANALYSIS.md`
 
 #### أربط Shopify:
-→ `docs/shopify-oauth-setup.md`
+→ `SHOPIFY_OAUTH_SETUP.md`
+
+#### أتحقق من Railway:
+→ `RAILWAY_ENV_CHECK.md`
 
 ---
 
 ## 📈 مستويات الوثائق
+
+### Level 0: حل المشاكل الحالية (10 دقائق) 🚨
+```
+FIX_500_ERRORS_NOW.md
+RAILWAY_ENV_CHECK.md
+```
 
 ### Level 1: Quick Start (5 دقائق)
 ```
@@ -303,7 +364,7 @@ PROJECT_ARCHITECTURE_REVIEW.md
 
 ### Level 3: Implementation (30 دقيقة)
 ```
-ACTION_PLAN.md
+ENVIRONMENT_VARIABLES_GUIDE.md
 LOCAL_TESTING_GUIDE.md
 QUICK_DATABASE_SETUP.sql
 ```
@@ -320,25 +381,38 @@ docs/features.md
 
 ## ✅ Checklist الوثائق
 
+### إذا كان لديك 500 errors:
+- [ ] FIX_500_ERRORS_NOW.md
+- [ ] RAILWAY_ENV_CHECK.md
+- [ ] CURRENT_SITUATION_ANALYSIS.md
+
 ### قرأت:
 - [ ] START_HERE_AR.md
 - [ ] COMPLETE_SYSTEM_OVERVIEW.md
 - [ ] PROJECT_ARCHITECTURE_REVIEW.md
 
 ### نفذت:
-- [ ] LOCAL_TESTING_GUIDE.md
+- [ ] ENVIRONMENT_VARIABLES_GUIDE.md
 - [ ] QUICK_DATABASE_SETUP.sql
-- [ ] ACTION_PLAN.md
+- [ ] LOCAL_TESTING_GUIDE.md
 
 ### راجعت:
 - [ ] docs/api.md
 - [ ] docs/troubleshooting.md
-- [ ] RAILWAY_DEPLOYMENT_GUIDE.md
+- [ ] RAILWAY_SETUP_FINAL.md
 - [ ] VERCEL_DEPLOYMENT_GUIDE.md
 
 ---
 
 ## 🎓 مسارات التعلم
+
+### مسار حل المشاكل (أولوية):
+```
+1. FIX_500_ERRORS_NOW.md
+2. RAILWAY_ENV_CHECK.md
+3. CURRENT_SITUATION_ANALYSIS.md
+4. ENVIRONMENT_VARIABLES_GUIDE.md
+```
 
 ### مسار المبتدئ:
 ```
@@ -358,8 +432,8 @@ docs/features.md
 
 ### مسار DevOps:
 ```
-1. ACTION_PLAN.md
-2. RAILWAY_DEPLOYMENT_GUIDE.md
+1. ENVIRONMENT_VARIABLES_GUIDE.md
+2. RAILWAY_SETUP_FINAL.md
 3. VERCEL_DEPLOYMENT_GUIDE.md
 4. docs/deployment.md
 ```
@@ -368,25 +442,40 @@ docs/features.md
 
 ## 📞 الدعم
 
-إذا لم تجد ما تبحث عنه:
+### إذا لم تجد ما تبحث عنه:
+
+#### للمشاكل الحالية:
+1. راجع `FIX_500_ERRORS_NOW.md`
+2. تحقق من `RAILWAY_ENV_CHECK.md`
+3. راجع `CURRENT_SITUATION_ANALYSIS.md`
+
+#### للمشاكل العامة:
 1. راجع `docs/troubleshooting.md`
-2. تحقق من `ACTION_PLAN.md`
+2. تحقق من `RAILWAY_FIX.md`
 3. راجع `COMPLETE_SYSTEM_OVERVIEW.md`
+
+### روابط مهمة:
+- **Frontend**: https://tetiano.vercel.app
+- **Backend**: https://tetiano-production.up.railway.app
+- **Supabase**: https://hgphobgcyjrtshwrnxfj.supabase.co
 
 ---
 
 ## 🎉 الخلاصة
 
 الوثائق منظمة بشكل يسهل:
+- ✅ حل المشاكل الحالية (أولوية)
 - ✅ البدء السريع
 - ✅ الفهم العميق
 - ✅ التنفيذ الصحيح
 - ✅ حل المشاكل
 
-**ابدأ من START_HERE_AR.md واتبع المسار المناسب لك! 🚀**
+**إذا كان لديك 500 errors، ابدأ من FIX_500_ERRORS_NOW.md ⚡**
+
+**وإلا، ابدأ من START_HERE_AR.md واتبع المسار المناسب لك! 🚀**
 
 ---
 
-**تم إنشاء هذا الملف:** 2024-03-03
-**آخر تحديث:** 2024-03-03
-**الحالة:** ✅ Complete
+**تم إنشاء هذا الملف:** 2024-03-03  
+**آخر تحديث:** 6 مارس 2026  
+**الحالة:** ✅ محدّث مع حلول 500 errors
