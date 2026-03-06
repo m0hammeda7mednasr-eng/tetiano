@@ -102,6 +102,75 @@ router.get("/:brandId", authenticate, requirePermission("can_view_orders"), asyn
   }
 });
 
+// Get single order by ID
+router.get("/:brandId/order/:orderId", authenticate, requirePermission("can_view_orders"), async (req: AuthRequest, res) => {
+  try {
+    const { brandId, orderId } = req.params;
+
+    await assertUserBrandAccess(req.user?.id, brandId);
+
+    // Try to get from database first
+    const { data: storedOrder, error: storedOrderError } = await supabase
+      .from('shopify_orders')
+      .select('*')
+      .eq('brand_id', brandId)
+      .eq('id', orderId)
+      .maybeSingle();
+
+    if (!storedOrderError && storedOrder) {
+      return res.json({
+        source: 'database',
+        order: storedOrder,
+      });
+    }
+
+    // If not found or schema error, try Shopify
+    if (!isSchemaCompatibilityError(storedOrderError) && storedOrderError) {
+      throw storedOrderError;
+    }
+
+    // Fallback: Get from Shopify
+    const { data: brand, error: brandError } = await supabase
+      .from('brands')
+      .select('*')
+      .eq('id', brandId)
+      .maybeSingle();
+
+    if (brandError) throw brandError;
+    if (!brand) {
+      return res.status(404).json({ error: 'Brand not found' });
+    }
+
+    const shopifyConfig = getShopifyConfig(brand.name, {
+      domain: brand.shopify_domain,
+      accessToken: brand.shopify_access_token,
+      legacyAccessToken: brand.access_token,
+      locationId: brand.shopify_location_id,
+    });
+    const shopifyService = new ShopifyService(shopifyConfig);
+
+    // Try to get order from Shopify by ID
+    const orders = await shopifyService.getRecentOrders(100);
+    const order = orders.find((o: any) => o.id === orderId || o.shopify_order_id === orderId);
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    res.json({
+      source: 'shopify_live',
+      order,
+    });
+  } catch (error: any) {
+    if (error instanceof BrandAccessError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+
+    logger.error('Get single order error', { error: error.message });
+    res.status(500).json({ error: 'Failed to fetch order' });
+  }
+});
+
 // Get recent customers for a brand
 router.get("/:brandId/customers", authenticate, requirePermission("can_view_orders"), async (req: AuthRequest, res) => {
   try {

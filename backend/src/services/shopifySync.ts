@@ -43,13 +43,20 @@ export class ShopifySyncService {
     options?: { wipeExistingData?: boolean },
   ): Promise<ShopifyFullSyncSummary> {
     const wipeExistingData = options?.wipeExistingData !== false;
-    const brand = await this.getBrandOrThrow(brandId);
-    await this.updateBrandSyncState(brandId, {
-      sync_status: "syncing",
-      last_sync_error: null,
-    });
-
+    
     try {
+      const brand = await this.getBrandOrThrow(brandId);
+      
+      // Validate Shopify configuration
+      if (!brand.shopify_domain && !brand.access_token && !brand.shopify_access_token) {
+        throw new Error('Brand is not connected to Shopify. Please connect your Shopify store first.');
+      }
+
+      await this.updateBrandSyncState(brandId, {
+        sync_status: "syncing",
+        last_sync_error: null,
+      });
+
       await this.ensureOperationalTables();
 
       const shopifyConfig = getShopifyConfig(String(brand.name || ""), {

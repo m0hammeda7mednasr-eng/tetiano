@@ -254,8 +254,29 @@ router.post(
         return res.status(error.status).json({ error: error.message, code: error.code });
       }
 
-      logger.error('Sync brand error', { error: error.message });
-      res.status(500).json({ error: error.message || 'Failed to sync brand' });
+      // Better error messages
+      let errorMessage = error.message || 'Failed to sync brand';
+      let statusCode = 500;
+
+      if (errorMessage.includes('not connected to Shopify')) {
+        statusCode = 400;
+      } else if (errorMessage.includes('Invalid Shopify configuration')) {
+        statusCode = 400;
+        errorMessage = 'Shopify store is not properly configured. Please check your Shopify connection settings.';
+      } else if (errorMessage.includes('Brand not found')) {
+        statusCode = 404;
+      }
+
+      logger.error('Sync brand error', { 
+        error: error.message, 
+        brandId: req.params.brandId,
+        stack: error.stack 
+      });
+      
+      res.status(statusCode).json({ 
+        error: errorMessage,
+        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
     }
   },
 );
