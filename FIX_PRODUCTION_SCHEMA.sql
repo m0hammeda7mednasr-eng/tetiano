@@ -44,10 +44,26 @@ WHERE s.id = r.id AND r.rn > 1;
 -- 4. Add store_id to user_profiles if missing
 ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS store_id UUID REFERENCES stores(id) ON DELETE SET NULL;
 
--- 5. Backfill user_profiles.store_id from primary_brand_id
-UPDATE user_profiles
-SET store_id = primary_brand_id
-WHERE store_id IS NULL AND primary_brand_id IS NOT NULL;
+-- 5. Backfill user_profiles.store_id from primary_brand_id (if column exists)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema = 'public' 
+      AND table_name = 'user_profiles' 
+      AND column_name = 'primary_brand_id'
+  ) THEN
+    UPDATE user_profiles
+    SET store_id = primary_brand_id
+    WHERE store_id IS NULL AND primary_brand_id IS NOT NULL;
+  END IF;
+END $$;
+
+-- 5b. If no primary_brand_id, assign first available store to users without store_id
+UPDATE user_profiles up
+SET store_id = (SELECT id FROM stores LIMIT 1)
+WHERE store_id IS NULL
+  AND EXISTS (SELECT 1 FROM stores);
 
 -- 6. Create store_memberships table
 CREATE TABLE IF NOT EXISTS store_memberships (
