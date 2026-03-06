@@ -189,7 +189,7 @@ async function fetchAndSetProfile(
 
     const safeMemberships = membershipError ? [] : memberships || [];
 
-    const profilePermissions = toPermissionMap(profile?.permissions);
+    const profilePermissions = null; // Removed: toPermissionMap(profile?.permissions);
     let teamPermissions: Record<string, boolean> | null = null;
 
     if (normalizedRole !== "admin" && !profilePermissions && safeMemberships?.[0]?.team_id) {
@@ -268,8 +268,8 @@ async function fetchAndSetProfile(
 
 async function getProfileWithRetry(userId: string, retries = 6, delayMs = 300) {
   const profileSelectVariants = [
-    "id, full_name, role, is_active, avatar_color, permissions",
     "id, full_name, role, is_active, avatar_color",
+    "id, full_name, role, is_active",
   ];
 
   for (let attempt = 0; attempt < retries; attempt += 1) {
