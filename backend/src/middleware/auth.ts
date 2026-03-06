@@ -24,6 +24,9 @@ function isSchemaCompatibilityError(error: any): boolean {
   const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
   return (
     text.includes("column") ||
+    text.includes("null value") ||
+    text.includes("violates not-null") ||
+    text.includes("check constraint") ||
     text.includes("relation") ||
     text.includes("does not exist") ||
     text.includes("schema cache") ||
@@ -184,8 +187,8 @@ export const authenticate = async (
     }
 
     const profileSelectVariants = [
-      "id, full_name, role, is_active, avatar_color, permissions, store_id, primary_brand_id, platform_role",
-      "id, full_name, role, is_active, avatar_color, permissions, store_id, primary_brand_id",
+      "id, full_name, role, is_active, avatar_color, permissions, store_id, platform_role",
+      "id, full_name, role, is_active, avatar_color, permissions, store_id",
       "id, full_name, role, is_active, avatar_color, permissions",
       "id, full_name, role, is_active, avatar_color",
     ];
@@ -227,7 +230,6 @@ export const authenticate = async (
 
     let storeId: string | null =
       (profile?.store_id as string | undefined) ||
-      (profile?.primary_brand_id as string | undefined) ||
       null;
     let storeRole: StoreRole | null = profileStoreRole;
     let membershipId: string | null = null;

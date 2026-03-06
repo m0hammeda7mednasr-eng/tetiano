@@ -9,7 +9,6 @@ export interface UserProfile {
   role: "admin" | "manager" | "staff" | "owner" | "operator" | "user" | "viewer";
   store_role?: "admin" | "manager" | "staff" | "viewer";
   store_id?: string | null;
-  primary_brand_id?: string | null;
   is_active: boolean;
   avatar_color: string;
   permissions?: string[] | Record<string, boolean> | null;
@@ -221,45 +220,20 @@ async function fetchAndSetProfile(
   }
 }
 
-async function getProfileWithRetry(userId: string, retries = 6, delayMs = 300) {
-  const profileSelectVariants = [
-    "id, full_name, role, store_role, store_id, primary_brand_id, is_active, avatar_color, permissions",
-    "id, full_name, role, store_id, primary_brand_id, is_active, avatar_color, permissions",
-    "id, full_name, role, store_id, primary_brand_id, is_active, avatar_color",
-    "id, full_name, store_role, store_id, primary_brand_id, is_active, avatar_color, permissions",
-    "id, full_name, store_id, primary_brand_id, is_active, avatar_color, permissions",
-    "id, full_name, store_id, primary_brand_id, is_active, avatar_color",
-    "id, full_name, role, is_active, avatar_color, permissions",
-    "id, full_name, role, is_active, avatar_color",
-    "id, full_name, is_active, avatar_color, permissions",
-    "id, full_name, is_active, avatar_color",
-  ];
-
+async function getProfileWithRetry(userId: string, retries = 2, delayMs = 250) {
   for (let attempt = 0; attempt < retries; attempt += 1) {
-    let profileData: any = null;
-    let profileError: any = null;
+    const { data, error } = await supabase
+      .from("user_profiles")
+      .select("*")
+      .eq("id", userId)
+      .maybeSingle();
 
-    for (const selectQuery of profileSelectVariants) {
-      const { data, error } = await supabase
-        .from("user_profiles")
-        .select(selectQuery)
-        .eq("id", userId)
-        .maybeSingle();
-
-      if (!error) {
-        profileData = data;
-        profileError = null;
-        break;
-      }
-
-      profileError = error;
-      if (!isSchemaCompatibilityError(error)) {
-        break;
-      }
+    if (!error) {
+      return data || null;
     }
 
-    if (!profileError && profileData) {
-      return profileData;
+    if (!isSchemaCompatibilityError(error)) {
+      break;
     }
 
     if (attempt < retries - 1) {
@@ -285,7 +259,6 @@ async function getProfileFromApi(userId: string): Promise<UserProfile | null> {
       role: normalizeRole(profile?.store_role || user?.store_role || profile?.role),
       store_role: normalizeStoreRole(profile?.store_role || user?.store_role || profile?.role),
       store_id: resolveApiStoreId(profile, store),
-      primary_brand_id: profile?.primary_brand_id || null,
       is_active: profile?.is_active !== false,
       avatar_color: String(profile?.avatar_color || randomProfileColor()),
       permissions: user?.permissions || profile?.permissions || null,
@@ -311,22 +284,24 @@ async function tryBootstrapStore(): Promise<boolean> {
 }
 
 function resolveProfileStoreId(profile: any): string | null {
-  return profile?.store_id || profile?.primary_brand_id || null;
+  return profile?.store_id || null;
 }
 
 function resolveApiStoreId(profile: any, store: any): string | null {
-  return profile?.store_id || profile?.primary_brand_id || store?.id || null;
+  return profile?.store_id || store?.id || null;
 }
 
 function isExpectedApiFallbackError(error: any): boolean {
   const status = Number(error?.response?.status || 0);
-  return status === 401 || status === 403 || status === 404;
+  return status === 400 || status === 401 || status === 403 || status === 404 || status === 503;
 }
 
 function isSchemaCompatibilityError(error: any): boolean {
   const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
   return (
     text.includes("column") ||
+    text.includes("null value") ||
+    text.includes("violates not-null") ||
     text.includes("relation") ||
     text.includes("does not exist") ||
     text.includes("schema cache") ||

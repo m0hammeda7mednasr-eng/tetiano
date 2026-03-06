@@ -1,338 +1,129 @@
-# 🏪 Tetiano Inventory Management System
+# Tetiano - نظام إدارة المخزون المتكامل
 
-نظام إدارة مخزون احترافي متكامل مع Shopify، مصمم خصيصاً لإدارة متاجر متعددة بكفاءة عالية.
+نظام شامل لإدارة المخزون مع تكامل Shopify، مصمم للشركات التي تدير عدة علامات تجارية.
 
-[![Production Status](https://img.shields.io/badge/Status-95%25%20Ready-yellow)](https://tetiano.vercel.app)
-[![Frontend](https://img.shields.io/badge/Frontend-Vercel-black)](https://tetiano.vercel.app)
-[![Backend](https://img.shields.io/badge/Backend-Railway-purple)](https://tetiano-production.up.railway.app)
-[![Database](https://img.shields.io/badge/Database-Supabase-green)](https://supabase.com)
+## المميزات الرئيسية
 
----
+- 🏪 **تكامل Shopify**: مزامنة تلقائية للمنتجات والطلبات والمخزون
+- 📊 **إدارة متعددة المتاجر**: دعم عدة متاجر وعلامات تجارية
+- 👥 **نظام صلاحيات متقدم**: أدوار ومستويات وصول مخصصة
+- 📦 **تتبع المخزون**: متابعة حركة المخزون في الوقت الفعلي
+- 📈 **تقارير وتحليلات**: تقارير يومية وإحصائيات مفصلة
+- 🔔 **إشعارات تلقائية**: تنبيهات عند نفاد المخزون
 
-## 📋 جدول المحتويات
-
-- [نظرة عامة](#-نظرة-عامة)
-- [الميزات الرئيسية](#-الميزات-الرئيسية)
-- [التقنيات المستخدمة](#-التقنيات-المستخدمة)
-- [البنية المعمارية](#-البنية-المعمارية)
-- [التثبيت والإعداد](#-التثبيت-والإعداد)
-- [النشر على Production](#-النشر-على-production)
-- [الوثائق](#-الوثائق)
-- [الحالة الحالية](#-الحالة-الحالية)
-
----
-
-## 🎯 نظرة عامة
-
-Tetiano هو نظام إدارة مخزون شامل يربط متاجر Shopify المتعددة في منصة واحدة، مع:
-
-- ✅ إدارة مستخدمين وفرق بصلاحيات متقدمة
-- ✅ ربط متاجر Shopify عبر OAuth
-- ✅ مزامجة تلقائية للمنتجات والمخزون
-- ✅ تقارير يومية وإحصائيات تفصيلية
-- ✅ إدارة الأوردرات والإشعارات
-- ✅ سجلات تدقيق شاملة (Audit Logs)
-- ✅ واجهة مستخدم عربية احترافية
-
----
-
-## ✨ الميزات الرئيسية
-
-### 🔐 إدارة المستخدمين والصلاحيات
-- نظام أدوار متقدم (Admin, Manager, Staff)
-- إدارة فرق مع صلاحيات مخصصة
-- تحكم دقيق في الوصول للعلامات التجارية
-- سجلات تدقيق لجميع العمليات
-
-### 🛍️ تكامل Shopify
-- ربط متاجر متعددة عبر OAuth
-- مزامجة تلقائية للمنتجات والمخزون
-- استقبال Webhooks في الوقت الفعلي
-- إدارة الأوردرات والمنتجات
-
-### 📊 التقارير والإحصائيات
-- تقارير يومية تلقائية
-- إحصائيات مفصلة للمبيعات والمخزون
-- تنبيهات للمخزون المنخفض
-- تحليلات الأداء
-
-### 📦 إدارة المخزون
-- تتبع المخزون في الوقت الفعلي
-- تعديلات المخزون مع سجل كامل
-- تنبيهات تلقائية
-- مزامجة ثنائية الاتجاه مع Shopify
-
----
-
-## 🛠️ التقنيات المستخدمة
-
-### Frontend
-- **React 18** + **TypeScript**
-- **Vite** - Build tool سريع
-- **Tailwind CSS** - Styling
-- **Zustand** - State management
-- **React Router** - Routing
-- **Axios** - HTTP client
-- **Lucide React** - Icons
+## التقنيات المستخدمة
 
 ### Backend
-- **Node.js** + **Express**
-- **TypeScript**
-- **Supabase** - Database & Auth
-- **Node-cron** - Scheduled jobs
-- **Winston** - Logging
+- Node.js + Express + TypeScript
+- Supabase (PostgreSQL + Auth)
+- Shopify Admin API
+- Bull Queue للمهام المجدولة
 
-### Infrastructure
-- **Vercel** - Frontend hosting
-- **Railway** - Backend hosting
-- **Supabase** - PostgreSQL database
-- **GitHub** - Version control
+### Frontend
+- React + TypeScript
+- Vite
+- TailwindCSS
+- React Query
 
----
+## البدء السريع
 
-## 🏗️ البنية المعمارية
+### 1. المتطلبات
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Frontend (Vercel)                     │
-│  React + TypeScript + Tailwind CSS + Zustand            │
-│  https://tetiano.vercel.app                             │
-└────────────────────┬────────────────────────────────────┘
-                     │ HTTPS/REST API
-                     ▼
-┌─────────────────────────────────────────────────────────┐
-│                   Backend (Railway)                      │
-│  Node.js + Express + TypeScript                         │
-│  https://tetiano-production.up.railway.app              │
-└────────────┬───────────────────────┬────────────────────┘
-             │                       │
-             │ Supabase Client       │ Shopify API
-             ▼                       ▼
-┌────────────────────────┐  ┌──────────────────────────┐
-│  Database (Supabase)   │  │   Shopify Stores         │
-│  PostgreSQL + Auth     │  │   OAuth + Webhooks       │
-│  + RLS Policies        │  │   Multiple Brands        │
-└────────────────────────┘  └──────────────────────────┘
-```
-
----
-
-## 🚀 التثبيت والإعداد
-
-### المتطلبات الأساسية
-
-- Node.js 18+ و npm
+- Node.js 18+
 - حساب Supabase
 - حساب Shopify Partner (للتكامل)
 
-### 1. Clone المشروع
+### 2. التثبيت
 
 ```bash
-git clone https://github.com/your-username/tetiano.git
+# استنساخ المشروع
+git clone <repository-url>
 cd tetiano
-```
 
-### 2. إعداد Backend
-
-```bash
+# تثبيت dependencies للـ backend
 cd backend
 npm install
 
-# انسخ ملف البيئة
-cp .env.example .env
-
-# عدّل .env وأضف:
-# - SUPABASE_URL
-# - SUPABASE_ANON_KEY
-# - SUPABASE_SERVICE_KEY (من Supabase Dashboard)
-# - FRONTEND_URL=http://localhost:5173
-# - BACKEND_URL=http://localhost:3002
-
-# شغّل Backend
-npm run dev
-```
-
-### 3. إعداد Frontend
-
-```bash
-cd frontend
+# تثبيت dependencies للـ frontend
+cd ../frontend
 npm install
+```
 
-# انسخ ملف البيئة
-cp .env.example .env
+### 3. الإعداد
 
-# عدّل .env وأضف:
-# - VITE_API_URL=http://localhost:3002
-# - VITE_SUPABASE_URL
-# - VITE_SUPABASE_ANON_KEY
+1. انسخ `.env.example` إلى `.env` في مجلد backend
+2. املأ المتغيرات المطلوبة (Supabase, Shopify)
+3. شغل migrations في Supabase (ابدأ من `019_final_production_fix.sql`)
 
-# شغّل Frontend
+### 4. التشغيل المحلي
+
+```bash
+# Backend
+cd backend
+npm run dev
+
+# Frontend (في terminal آخر)
+cd frontend
 npm run dev
 ```
 
-### 4. إعداد Database
+## النشر على Production
 
-```bash
-# افتح Supabase Dashboard
-# اذهب إلى SQL Editor
-# نفذ الملفات في supabase/migrations/ بالترتيب
+### Backend (Railway)
+1. اربط المشروع بـ Railway
+2. اضبط Environment Variables
+3. Railway سيعمل deploy تلقائي
+
+### Frontend (Vercel)
+1. اربط المشروع بـ Vercel
+2. اضبط Environment Variables
+3. Vercel سيعمل deploy تلقائي
+
+### Database (Supabase)
+1. شغل migration 019 في SQL Editor
+2. تأكد من إنشاء stores للمستخدمين
+
+راجع `SETUP_GUIDE.md` للتفاصيل الكاملة.
+
+## الهيكل
+
+```
+tetiano/
+├── backend/           # Express API
+│   ├── src/
+│   │   ├── routes/    # API endpoints
+│   │   ├── services/  # Business logic
+│   │   ├── middleware/# Auth, validation
+│   │   └── utils/     # Helpers
+│   └── package.json
+├── frontend/          # React app
+│   ├── src/
+│   │   ├── components/
+│   │   ├── pages/
+│   │   ├── lib/
+│   │   └── hooks/
+│   └── package.json
+├── supabase/
+│   └── migrations/    # Database migrations
+└── docs/              # Documentation
 ```
 
----
+## الوثائق
 
-## 🌐 النشر على Production
+- [دليل الإعداد](SETUP_GUIDE.md)
+- [دليل الـ API](docs/api.md)
+- [البنية المعمارية](docs/architecture.md)
+- [دليل النشر](docs/deployment.md)
+- [إعداد Shopify OAuth](docs/shopify-oauth-setup.md)
 
-### الحالة الحالية
+## المساهمة
 
-| المكون | الحالة | URL |
-|--------|--------|-----|
-| Frontend | ✅ يعمل | https://tetiano.vercel.app |
-| Backend | 🟡 يحتاج إصلاح | https://tetiano-production.up.railway.app |
-| Database | ✅ جاهز | Supabase |
+راجع [CONTRIBUTING.md](CONTRIBUTING.md) لمعرفة كيفية المساهمة في المشروع.
 
-### المشكلة الحالية
+## الترخيص
 
-Backend يحتاج تحديث `SUPABASE_SERVICE_KEY` في Railway. راجع [PRODUCTION_STATUS_REPORT.md](./PRODUCTION_STATUS_REPORT.md) للتفاصيل الكاملة.
+MIT License - راجع [LICENSE](LICENSE) للتفاصيل.
 
-### خطوات النشر
+## الدعم
 
-#### 1. Frontend على Vercel
-
-```bash
-# تم النشر بالفعل على:
-https://tetiano.vercel.app
-
-# Environment Variables المطلوبة:
-VITE_API_URL=https://tetiano-production.up.railway.app
-VITE_SUPABASE_URL=https://hgphobgcyjrtshwrnxfj.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJhbGc...
-```
-
-#### 2. Backend على Railway
-
-```bash
-# تم النشر بالفعل على:
-https://tetiano-production.up.railway.app
-
-# Environment Variables المطلوبة:
-SUPABASE_URL=https://hgphobgcyjrtshwrnxfj.supabase.co
-SUPABASE_ANON_KEY=eyJhbGc...
-SUPABASE_SERVICE_KEY=eyJhbGc... (⚠️ يحتاج تحديث!)
-FRONTEND_URL=https://tetiano.vercel.app
-BACKEND_URL=https://tetiano-production.up.railway.app
-API_URL=https://tetiano-production.up.railway.app
-PORT=3002
-NODE_ENV=production
-TZ=Africa/Cairo
-```
-
-#### 3. Database على Supabase
-
-```bash
-# تم الإعداد بالفعل
-# Project: hgphobgcyjrtshwrnxfj
-# URL: https://hgphobgcyjrtshwrnxfj.supabase.co
-```
-
----
-
-## 📚 الوثائق
-
-### الوثائق الرئيسية
-
-- [📊 تقرير الوضع الإنتاجي](./PRODUCTION_STATUS_REPORT.md) - الحالة الحالية والمشاكل
-- [🔧 دليل المتغيرات البيئية](./ENVIRONMENT_VARIABLES_GUIDE.md) - شرح شامل للمتغيرات
-- [🛍️ دليل ربط Shopify](./SHOPIFY_OAUTH_SETUP.md) - خطوات ربط المتاجر
-- [📋 خطة العمل](./ACTION_PLAN.md) - خطوات الإصلاح والتشغيل
-
-### الوثائق التقنية
-
-- [🏗️ معمارية النظام](./docs/architecture.md)
-- [📡 توثيق API](./docs/api.md)
-- [🚀 دليل النشر](./docs/deployment.md)
-- [🔍 استكشاف الأخطاء](./docs/troubleshooting.md)
-
----
-
-## 📊 الحالة الحالية
-
-### نسبة الإنجاز: 95% ✅
-
-| المكون | الحالة | النسبة |
-|--------|--------|--------|
-| Frontend Code | ✅ جاهز | 100% |
-| Backend Code | ✅ جاهز | 100% |
-| Backend Deploy | 🟡 يحتاج تحديث | 90% |
-| Database | ✅ جاهز | 100% |
-| CORS | ✅ يعمل | 100% |
-| OAuth Flow | ✅ جاهز | 100% |
-| Webhooks | ✅ جاهز | 100% |
-| Documentation | ✅ كامل | 100% |
-
-### المشكلة الوحيدة
-
-**500 Internal Server Errors** على بعض endpoints بسبب:
-- `SUPABASE_SERVICE_KEY` في Railway غير صحيح أو مفقود
-
-### الحل
-
-1. احصل على `service_role` key من Supabase Dashboard
-2. حدّث المتغير في Railway
-3. أعد Deploy
-
-راجع [PRODUCTION_STATUS_REPORT.md](./PRODUCTION_STATUS_REPORT.md) للتفاصيل الكاملة.
-
----
-
-## 🔐 الأمان
-
-- ✅ RLS Policies مفعّلة على جميع الجداول
-- ✅ JWT Authentication عبر Supabase
-- ✅ CORS محدد للنطاقات المسموحة
-- ✅ Rate limiting على API endpoints
-- ✅ HMAC verification للـ Webhooks
-- ✅ Audit logs لجميع العمليات الحساسة
-
----
-
-## 🤝 المساهمة
-
-المشروع حالياً في مرحلة Production. للمساهمة:
-
-1. Fork المشروع
-2. أنشئ branch جديد (`git checkout -b feature/amazing-feature`)
-3. Commit التغييرات (`git commit -m 'Add amazing feature'`)
-4. Push للـ branch (`git push origin feature/amazing-feature`)
-5. افتح Pull Request
-
----
-
-## 📝 الترخيص
-
-هذا المشروع ملكية خاصة. جميع الحقوق محفوظة.
-
----
-
-## 📞 الدعم
-
-للدعم والاستفسارات:
-
-- 📧 Email: support@tetiano.com
-- 🌐 Website: https://tetiano.vercel.app
-- 📚 Documentation: [docs/](./docs/)
-
----
-
-## 🎉 شكر خاص
-
-تم بناء هذا النظام باستخدام أفضل الممارسات والتقنيات الحديثة لضمان:
-- ⚡ أداء عالي
-- 🔒 أمان قوي
-- 📱 تجربة مستخدم ممتازة
-- 🌍 دعم كامل للغة العربية
-
----
-
-**آخر تحديث**: 6 مارس 2026  
-**الإصدار**: 1.0.0  
-**الحالة**: 🟡 95% جاهز - يحتاج إصلاح بسيط
+للمشاكل والأسئلة، افتح issue في GitHub أو راسلنا.

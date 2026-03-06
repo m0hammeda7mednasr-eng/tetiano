@@ -19,16 +19,6 @@ const router = Router();
 const inventoryService = new InventoryService();
 const shopifySyncService = new ShopifySyncService();
 
-const SHOPIFY_SCOPES = [
-  "read_products",
-  "write_products",
-  "read_inventory",
-  "write_inventory",
-  "read_orders",
-  "read_customers",
-  "read_locations",
-].join(",");
-
 router.use(authenticate);
 router.use(requireStoreContext());
 
@@ -122,30 +112,71 @@ async function upsertLegacyBrandForStore(params: {
 
   const storeName = await resolveStoreDisplayName(storeId);
   const suffix = storeId.replace(/-/g, "").slice(0, 6);
-  const insertPayload: Record<string, unknown> = {
-    id: storeId,
-    name: makeLegacyBrandName(storeName, storeId),
-    shopify_domain: shopDomain || `pending-${suffix}.myshopify.com`,
-    shopify_location_id: "pending",
-    updated_at: now,
-  };
-  insertPayload.api_key = apiKey;
-  insertPayload.api_secret = apiSecret;
-  insertPayload.shopify_api_key = apiKey;
-  insertPayload.is_active = true;
-  insertPayload.is_configured = false;
-
-  let insert = await supabase.from("brands").insert(insertPayload);
-  if (insert.error && isSchemaCompatibilityError(insert.error)) {
-    insert = await supabase.from("brands").insert({
+  const canonicalName = makeLegacyBrandName(storeName, storeId);
+  const canonicalDomain = shopDomain || `pending-${suffix}.myshopify.com`;
+  const insertPayloads: Array<Record<string, unknown>> = [
+    {
       id: storeId,
-      name: makeLegacyBrandName(storeName, storeId),
-      shopify_domain: shopDomain || `pending-${suffix}.myshopify.com`,
+      name: canonicalName,
+      shopify_domain: canonicalDomain,
       shopify_location_id: "pending",
-    });
+      api_key: apiKey,
+      api_secret: apiSecret,
+      shopify_api_key: apiKey,
+      is_active: true,
+      is_configured: false,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: storeId,
+      name: canonicalName,
+      shopify_domain: canonicalDomain,
+      shopify_location_id: "pending",
+      is_active: true,
+      is_configured: false,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: storeId,
+      name: canonicalName,
+      shopify_domain: canonicalDomain,
+      shopify_location_id: "pending",
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: storeId,
+      name: canonicalName,
+      shopify_domain: canonicalDomain,
+      shopify_location_id: "pending",
+    },
+    {
+      id: storeId,
+      name: canonicalName,
+      shopify_domain: canonicalDomain,
+    },
+  ];
+
+  let lastError: any = null;
+  for (const payload of insertPayloads) {
+    const insert = await supabase.from("brands").insert(payload);
+    if (!insert.error) {
+      return;
+    }
+
+    lastError = insert.error;
+    if (String(insert.error.code || "") === "23505") {
+      return;
+    }
+    if (!isSchemaCompatibilityError(insert.error)) {
+      break;
+    }
   }
-  if (insert.error && !isSchemaCompatibilityError(insert.error)) {
-    throw insert.error;
+
+  if (lastError) {
+    throw lastError;
   }
 }
 
@@ -1207,94 +1238,59 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
   }
 
   try {
-    // Save credentials to brands table for compatibility
-    await upsertLegacyBrandForStore({
-      storeId,
-      shopDomain,
-      apiKey,
-      apiSecret,
-    });
+    // Keep brand row in sync for one-release compatibility window.
+    try {
+      await upsertLegacyBrandForStore({
+        storeId,
+        shopDomain,
+        apiKey,
+        apiSecret,
+      });
+    } catch (brandSyncError: any) {
+      logger.warn("Legacy brand sync failed before Shopify connect", {
+        error: brandSyncError?.message,
+        code: brandSyncError?.code,
+        details: brandSyncError?.details,
+        hint: brandSyncError?.hint,
+        storeId,
+      });
+    }
 
-    // Create OAuth state
-    const state = crypto.randomBytes(32).toString("hex");
-    let stateInsert = await supabase.from("shopify_oauth_states").insert({
-      state,
+    // Canonical flow for this release: app endpoint proxies legacy OAuth installer.
+    const legacy = await requestLegacyInstallUrl(req, {
       shop: shopDomain,
-      brand_id: storeId,
-      user_id: req.user?.id || null,
       api_key: apiKey,
       api_secret: apiSecret,
-      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      brand_id: storeId,
     });
 
-    if (stateInsert.error && isSchemaCompatibilityError(stateInsert.error)) {
-      stateInsert = await supabase.from("shopify_oauth_states").insert({
-        state,
-        shop: shopDomain,
-        user_id: req.user?.id || null,
-        api_key: apiKey,
-        api_secret: apiSecret,
-      });
-    }
-
-    if (stateInsert.error && isSchemaCompatibilityError(stateInsert.error)) {
-      stateInsert = await supabase.from("shopify_oauth_states").insert({
-        state,
-        shop: shopDomain,
-      });
-    }
-
-    if (stateInsert.error) {
-      logger.error("Failed to create OAuth state", {
-        message: stateInsert.error.message,
-        code: stateInsert.error.code,
-        details: stateInsert.error.details,
-      });
-
-      if (isSchemaCompatibilityError(stateInsert.error)) {
-        return res.status(503).json({
-          error: "Database schema is missing required Shopify OAuth fields/tables. Run latest migrations.",
-        });
-      }
-
-      throw stateInsert.error;
-    }
-
-    // Update shopify_connections
-    const connectionUpsert = await supabase.from("shopify_connections").upsert(
-      {
-        store_id: storeId,
-        shop_domain: shopDomain,
-        access_token_encrypted: "",
-        scopes: SHOPIFY_SCOPES,
-        status: "disconnected",
-        updated_at: nowIso(),
-      },
-      { onConflict: "store_id" },
-    );
-    if (connectionUpsert.error && !isSchemaCompatibilityError(connectionUpsert.error)) {
-      throw connectionUpsert.error;
-    }
-
-    // Build install URL
-    const redirectUri = `${resolveBackendUrl(req)}/api/shopify/callback`;
-    const installUrl =
-      `https://${shopDomain}/admin/oauth/authorize?` +
-      `client_id=${encodeURIComponent(apiKey)}&` +
-      `scope=${encodeURIComponent(SHOPIFY_SCOPES)}&` +
-      `redirect_uri=${encodeURIComponent(redirectUri)}&` +
-      `state=${encodeURIComponent(state)}`;
-
-    return res.json({ install_url: installUrl, state, shop: shopDomain });
+    return res.json({
+      install_url: legacy.installUrl,
+      state: legacy.state,
+      shop: shopDomain,
+      source: "shopify_oauth_compat_bridge",
+    });
   } catch (error: any) {
+    const status = Number(error?.status || 0);
     logger.error("App shopify connect failed", {
       error: error?.message,
       code: error?.code,
       details: error?.details,
       hint: error?.hint,
+      status,
       storeId,
       shopDomain,
     });
+
+    if (status >= 400 && status < 600) {
+      if (status === 404 && error?.code === "brand_not_found") {
+        return res.status(503).json({
+          error: "Legacy Shopify compatibility mapping is missing for this store. Apply migration 019 and retry.",
+          code: "legacy_brand_mapping_missing",
+        });
+      }
+      return res.status(status).json({ error: error?.message || "Failed to start Shopify OAuth flow", code: error?.code });
+    }
 
     if (isSchemaCompatibilityError(error)) {
       return res.status(503).json({
@@ -1302,7 +1298,10 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
       });
     }
 
-    return res.status(500).json({ error: error?.message || "Failed to start Shopify OAuth flow" });
+    return res.status(503).json({
+      error: "Shopify OAuth flow is temporarily unavailable. Check backend logs and schema compatibility.",
+      code: "shopify_oauth_unavailable",
+    });
   }
 });
 

@@ -4,6 +4,9 @@ export function isSchemaCompatibilityError(error: any): boolean {
   const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
   return (
     text.includes("column") ||
+    text.includes("null value") ||
+    text.includes("violates not-null") ||
+    text.includes("check constraint") ||
     text.includes("relation") ||
     text.includes("does not exist") ||
     text.includes("schema cache") ||
