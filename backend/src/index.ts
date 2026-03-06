@@ -130,6 +130,7 @@ app.use("/api/app", appRoutes);
 app.use("/api/onboarding", onboardingRoutes);
 
 logger.info("API namespaces registered", {
+  deployment_marker: "2026-03-06-store-app-routes",
   routes: ["/api/webhooks", "/api/shopify", "/api/app", "/api/onboarding"],
 });
 
