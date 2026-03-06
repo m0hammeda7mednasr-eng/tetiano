@@ -1,15 +1,24 @@
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import { logger } from '../utils/logger';
 
 dotenv.config();
 
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY =
+  process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
   throw new Error('Missing Supabase environment variables');
 }
 
+if (SUPABASE_SERVICE_KEY.includes('placeholder')) {
+  logger.warn('Supabase service key looks like a placeholder value. Admin endpoints may fail.');
+}
+
 export const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY,
+  SUPABASE_URL,
+  SUPABASE_SERVICE_KEY,
   {
     auth: {
       autoRefreshToken: false,
@@ -21,7 +30,7 @@ export const supabase = createClient(
 // Client for user-authenticated requests
 export const createUserClient = (accessToken: string) => {
   return createClient(
-    process.env.SUPABASE_URL!,
+    SUPABASE_URL!,
     process.env.SUPABASE_ANON_KEY!,
     {
       global: {
