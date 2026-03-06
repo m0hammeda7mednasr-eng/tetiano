@@ -10,13 +10,13 @@ import {
   Webhook,
   Eye,
   EyeOff,
-  Save,
   AlertCircle,
   ExternalLink,
   Settings,
   Package,
   Activity,
   XCircle,
+  Link as LinkIcon,
 } from "lucide-react";
 import api from "../../lib/api";
 import { useToastStore } from "../../store/toastStore";
@@ -26,7 +26,6 @@ interface BrandConfig {
   name: string;
   shopify_domain: string;
   shopify_api_key: string;
-  shopify_access_token: string;
   is_configured: boolean;
   connected_at?: string;
   last_sync_at?: string;
@@ -48,10 +47,10 @@ export default function ShopifySettings() {
 
   const [brands, setBrands] = useState<BrandConfig[]>([]);
   const [selectedBrand, setSelectedBrand] = useState<string | null>(null);
-  const [formData, setFormData] = useState({
-    shopify_domain: "",
-    shopify_api_key: "",
-    shopify_access_token: "",
+  const [oauthData, setOauthData] = useState({
+    shop: "",
+    api_key: "",
+    api_secret: "",
   });
 
   const [webhooks, setWebhooks] = useState<WebhookConfig[]>([
@@ -93,10 +92,13 @@ export default function ShopifySettings() {
   ]);
 
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [showToken, setShowToken] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [showSecret, setShowSecret] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"brands" | "webhooks">("brands");
+
+  const backendUrl = import.meta.env.VITE_API_URL || window.location.origin;
+  const redirectUri = `${backendUrl}/api/shopify/callback`;
 
   useEffect(() => {
     loadBrands();
@@ -117,42 +119,37 @@ export default function ShopifySettings() {
     }
   };
 
-  const saveCredentials = async () => {
+  const startOAuthFlow = async () => {
     if (!selectedBrand) {
       addToast("يرجى اختيار علامة تجارية", "error");
       return;
     }
 
-    if (
-      !formData.shopify_domain ||
-      !formData.shopify_api_key ||
-      !formData.shopify_access_token
-    ) {
+    if (!oauthData.shop || !oauthData.api_key || !oauthData.api_secret) {
       addToast("يرجى ملء جميع الحقول", "error");
       return;
     }
 
     try {
-      setSaving(true);
-      await api.post("/api/admin/shopify/setup-credentials", {
-        brandId: selectedBrand,
-        apiKey: formData.shopify_api_key,
-        accessToken: formData.shopify_access_token,
-        domain: formData.shopify_domain,
+      setConnecting(true);
+      
+      // Start OAuth flow
+      const res = await api.get("/api/shopify/auth", {
+        params: {
+          shop: oauthData.shop,
+          brand_id: selectedBrand,
+          api_key: oauthData.api_key,
+          api_secret: oauthData.api_secret,
+        },
       });
 
-      addToast("تم ربط المتجر بنجاح ✓", "success");
-      setFormData({
-        shopify_domain: "",
-        shopify_api_key: "",
-        shopify_access_token: "",
-      });
-      setSelectedBrand(null);
-      await loadBrands();
+      if (res.data.url) {
+        // Redirect to Shopify OAuth
+        window.location.href = res.data.url;
+      }
     } catch (err: any) {
-      addToast(err.response?.data?.error || "خطأ في الربط", "error");
-    } finally {
-      setSaving(false);
+      addToast(err.response?.data?.error || "خطأ في بدء الربط", "error");
+      setConnecting(false);
     }
   };
 
@@ -224,7 +221,7 @@ export default function ShopifySettings() {
             <span className="section-label">Shopify Integration</span>
           </div>
           <h1 className="page-title">ربط متاجر Shopify</h1>
-          <p className="page-subtitle">ربط مباشر بدون OAuth - سريع وبسيط</p>
+          <p className="page-subtitle">ربط آمن عبر OAuth 2.0</p>
         </div>
         <button
           onClick={loadBrands}
@@ -267,6 +264,50 @@ export default function ShopifySettings() {
         </div>
       )}
 
+      {/* Redirect URI Info - Always Visible */}
+      <div className="card border-l-4 border-orange-500 bg-gradient-to-r from-orange-50 to-transparent p-5">
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <LinkIcon className="w-5 h-5 text-orange-600" />
+            <h3 className="text-base font-black text-slate-800">
+              Redirect URI - مهم جداً!
+            </h3>
+          </div>
+          <p className="text-sm text-slate-600">
+            انسخ هذا الرابط وضعه في إعدادات التطبيق في Shopify قبل الربط
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={redirectUri}
+              readOnly
+              className="input flex-1 bg-white font-mono text-sm font-bold text-orange-700"
+            />
+            <button
+              onClick={() => copyToClipboard(redirectUri, "redirect_uri")}
+              className="btn-primary"
+            >
+              {copiedField === "redirect_uri" ? (
+                <>
+                  <Check className="w-4 h-4" />
+                  تم
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4" />
+                  نسخ
+                </>
+              )}
+            </button>
+          </div>
+          <p className="text-xs text-slate-500">
+            📍 المكان: Shopify Admin → Settings → Apps → Develop apps → [Your
+            App] → Configuration → App setup → URLs → Allowed redirection
+            URL(s)
+          </p>
+        </div>
+      </div>
+
       {/* Tabs */}
       <div className="card p-1 flex gap-1">
         <button
@@ -301,9 +342,7 @@ export default function ShopifySettings() {
             <div className="flex gap-3">
               <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
               <div className="text-sm text-slate-700 space-y-3">
-                <p className="font-bold text-slate-800">
-                  خطوات الربط السريع:
-                </p>
+                <p className="font-bold text-slate-800">خطوات الربط:</p>
                 <ol className="list-decimal list-inside space-y-2 text-xs leading-relaxed">
                   <li>
                     اذهب إلى Shopify Admin → Settings → Apps and sales
@@ -318,21 +357,28 @@ export default function ShopifySettings() {
                     اختر الصلاحيات: Products (read/write), Inventory
                     (read/write), Orders (read), Locations (read)
                   </li>
+                  <li>احفظ التغييرات</li>
+                  <li>
+                    في App setup → URLs → Allowed redirection URL(s)، الصق
+                    الـ Redirect URI من الأعلى
+                  </li>
                   <li>احفظ واضغط "Install app"</li>
-                  <li>انسخ Admin API access token و API key</li>
-                  <li>الصقهم في النموذج أدناه واضغط "ربط المتجر"</li>
+                  <li>
+                    انسخ API key و API secret key (ليس Admin API access token!)
+                  </li>
+                  <li>الصقهم في النموذج أدناه واضغط "ربط عبر OAuth"</li>
                 </ol>
               </div>
             </div>
           </div>
 
-          {/* Connection Form */}
+          {/* OAuth Connection Form */}
           {unconnectedBrands.length > 0 && (
             <div className="card p-6 space-y-6">
               <div className="flex items-center gap-2 mb-2">
                 <Settings className="w-5 h-5 text-blue-600" />
                 <h2 className="text-lg font-black text-slate-800">
-                  ربط متجر جديد
+                  ربط متجر جديد عبر OAuth
                 </h2>
               </div>
 
@@ -347,6 +393,7 @@ export default function ShopifySettings() {
                     value={selectedBrand || ""}
                     onChange={(e) => setSelectedBrand(e.target.value)}
                     className="input w-full"
+                    disabled={connecting}
                   >
                     <option value="">-- اختر --</option>
                     {unconnectedBrands.map((brand) => (
@@ -357,7 +404,7 @@ export default function ShopifySettings() {
                   </select>
                 </div>
 
-                {/* Shopify Domain */}
+                {/* Shop Domain */}
                 <div>
                   <label className="block text-sm font-bold text-slate-700 mb-2">
                     Shopify Store Domain
@@ -365,12 +412,13 @@ export default function ShopifySettings() {
                   </label>
                   <input
                     type="text"
-                    value={formData.shopify_domain}
+                    value={oauthData.shop}
                     onChange={(e) =>
-                      setFormData({ ...formData, shopify_domain: e.target.value })
+                      setOauthData({ ...oauthData, shop: e.target.value })
                     }
                     placeholder="your-store.myshopify.com"
                     className="input w-full"
+                    disabled={connecting}
                   />
                   <p className="text-xs text-slate-500 mt-1">
                     مثال: my-store.myshopify.com
@@ -385,56 +433,65 @@ export default function ShopifySettings() {
                   </label>
                   <input
                     type="text"
-                    value={formData.shopify_api_key}
+                    value={oauthData.api_key}
                     onChange={(e) =>
-                      setFormData({ ...formData, shopify_api_key: e.target.value })
+                      setOauthData({ ...oauthData, api_key: e.target.value })
                     }
                     placeholder="Enter API Key"
                     className="input w-full font-mono text-sm"
+                    disabled={connecting}
                   />
                 </div>
 
-                {/* Access Token */}
+                {/* API Secret */}
                 <div>
                   <label className="block text-sm font-bold text-slate-700 mb-2">
-                    Admin API Access Token
+                    API Secret Key
                     <span className="text-red-500 mr-1">*</span>
+                    <span className="text-xs font-normal text-orange-600 mr-2">
+                      (ليس Admin API access token!)
+                    </span>
                   </label>
                   <div className="flex gap-2">
                     <input
-                      type={showToken ? "text" : "password"}
-                      value={formData.shopify_access_token}
+                      type={showSecret ? "text" : "password"}
+                      value={oauthData.api_secret}
                       onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          shopify_access_token: e.target.value,
+                        setOauthData({
+                          ...oauthData,
+                          api_secret: e.target.value,
                         })
                       }
-                      placeholder="shpat_xxxxxxxxxxxxx"
+                      placeholder="shpss_xxxxxxxxxxxxx"
                       className="input flex-1 font-mono text-sm"
+                      disabled={connecting}
                     />
                     <button
-                      onClick={() => setShowToken(!showToken)}
+                      onClick={() => setShowSecret(!showSecret)}
                       className="btn-secondary"
+                      disabled={connecting}
                     >
-                      {showToken ? (
+                      {showSecret ? (
                         <EyeOff className="w-4 h-4" />
                       ) : (
                         <Eye className="w-4 h-4" />
                       )}
                     </button>
                   </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    يبدأ بـ shpss_ (وليس shpat_)
+                  </p>
                 </div>
               </div>
 
-              {/* Save Button */}
+              {/* OAuth Button */}
               <button
-                onClick={saveCredentials}
-                disabled={saving || !selectedBrand}
+                onClick={startOAuthFlow}
+                disabled={connecting || !selectedBrand}
                 className="btn-primary w-full"
               >
-                <Save className="w-4 h-4" />
-                {saving ? "جاري الربط..." : "ربط المتجر"}
+                <LinkIcon className="w-4 h-4" />
+                {connecting ? "جاري التوجيه إلى Shopify..." : "ربط عبر OAuth"}
               </button>
             </div>
           )}
