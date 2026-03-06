@@ -1,26 +1,17 @@
 import { create } from "zustand";
 import { User } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
-
-const TEAM_PERMISSIONS_ENABLED = import.meta.env.VITE_TEAM_PERMISSIONS_ENABLED === "true";
+import api from "../lib/api";
 
 export interface UserProfile {
   id: string;
   full_name: string;
   role: "admin" | "manager" | "staff" | "owner" | "operator" | "user" | "viewer";
+  store_role?: "admin" | "manager" | "staff" | "viewer";
+  store_id?: string | null;
   is_active: boolean;
   avatar_color: string;
   permissions?: string[] | Record<string, boolean> | null;
-  team_members?: {
-    team_id: string;
-    role: string;
-    teams: {
-      id: string;
-      name: string;
-      color: string;
-    } | null;
-    team_permissions?: Record<string, boolean> | null;
-  }[];
 }
 
 interface AuthState {
@@ -101,7 +92,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (error) throw error;
   },
 
-  // Signup is open. We enforce admin for self-signup accounts.
+  // Signup is open. Owner role is assigned during bootstrap.
   signUp: async (email: string, password: string, full_name: string) => {
     const { data, error } = await supabase.auth.signUp({
       email,
@@ -118,7 +109,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return;
     }
 
-    // Best-effort safety net in case DB trigger policy wasn't updated yet.
+    // Best-effort profile row creation before backend bootstrap.
     const { error: profileUpsertError } = await supabase
       .from("user_profiles")
       .upsert({
@@ -131,7 +122,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     if (profileUpsertError) {
       console.warn(
-        "Failed to enforce admin role for new signup",
+        "Failed to seed profile for new signup",
         profileUpsertError.message,
       );
     }
@@ -170,54 +161,21 @@ async function fetchAndSetProfile(
   set: (state: Partial<AuthState>) => void,
 ) {
   try {
-    const profile = await getProfileWithRetry(user.id);
+    let profile = await getProfileWithRetry(user.id);
+
+    if (!profile?.store_id) {
+      try {
+        await api.post("/api/onboarding/bootstrap-store");
+        profile = await getProfileWithRetry(user.id, 6, 250);
+      } catch (bootstrapError) {
+        console.warn("Store bootstrap failed", bootstrapError);
+      }
+    }
+
     const normalizedRole = normalizeRole(profile?.role);
-
-    const { data: memberships, error: membershipError } = await supabase
-      .from("team_members")
-      .select(
-        `
-        team_id,
-        role,
-        teams ( id, name, color )
-      `,
-      )
-      .eq("user_id", user.id)
-      .limit(1);
-
-    if (membershipError && !isSchemaCompatibilityError(membershipError)) {
-      throw membershipError;
-    }
-
-    const safeMemberships = membershipError ? [] : memberships || [];
-
     const profilePermissions = toPermissionMap(profile?.permissions);
-    let teamPermissions: Record<string, boolean> | null = null;
-
-    if (
-      TEAM_PERMISSIONS_ENABLED &&
-      normalizedRole !== "admin" &&
-      !profilePermissions &&
-      safeMemberships?.[0]?.team_id
-    ) {
-      const { data, error: teamPermissionsError } = await supabase
-        .from("team_permissions")
-        .select("*")
-        .eq("team_id", safeMemberships[0].team_id)
-        .maybeSingle();
-
-      if (teamPermissionsError && !isSchemaCompatibilityError(teamPermissionsError)) {
-        throw teamPermissionsError;
-      }
-
-      if (!teamPermissionsError) {
-        teamPermissions = toPermissionMap(data);
-      }
-    }
-
     const perms = mergePermissionMaps(
       profilePermissions,
-      teamPermissions,
       buildRoleFallbackPermissions(normalizedRole),
     );
 
@@ -226,31 +184,10 @@ async function fetchAndSetProfile(
     }
 
     const mergedProfile: UserProfile | null = profile
-      ? {
-          ...(profile as UserProfile),
-          team_members:
-            safeMemberships.map((m: any) => ({
-              team_id: m.team_id,
-              role: m.role,
-              teams: normalizeTeam(m.teams),
-              team_permissions: perms,
-            })),
-        }
+      ? ({ ...(profile as UserProfile) })
       : null;
 
-    // If a super admin email is configured, ensure this account is admin.
-    const superAdminEmail = import.meta.env.VITE_SUPER_ADMIN_EMAIL;
-    const shouldForceAdmin = !!superAdminEmail && user.email === superAdminEmail;
-    const effectiveRole =
-      shouldForceAdmin || normalizedRole === "admin" ? "admin" : normalizedRole;
-
-    if (shouldForceAdmin && mergedProfile && effectiveRole === "admin" && mergedProfile.role !== "admin") {
-      await supabase
-        .from("user_profiles")
-        .update({ role: "admin" })
-        .eq("id", user.id);
-      mergedProfile.role = "admin";
-    }
+    const effectiveRole = normalizedRole;
 
     set({
       user,
@@ -275,8 +212,10 @@ async function fetchAndSetProfile(
 
 async function getProfileWithRetry(userId: string, retries = 6, delayMs = 300) {
   const profileSelectVariants = [
+    "id, full_name, role, store_id, is_active, avatar_color, permissions",
+    "id, full_name, role, store_id, is_active, avatar_color",
+    "id, full_name, role, is_active, avatar_color, permissions",
     "id, full_name, role, is_active, avatar_color",
-    "id, full_name, role, is_active",
   ];
 
   for (let attempt = 0; attempt < retries; attempt += 1) {
@@ -312,14 +251,6 @@ async function getProfileWithRetry(userId: string, retries = 6, delayMs = 300) {
   }
 
   return null;
-}
-
-function normalizeTeam(teamValue: any) {
-  if (!teamValue) return null;
-  if (Array.isArray(teamValue)) {
-    return teamValue[0] || null;
-  }
-  return teamValue;
 }
 
 function isSchemaCompatibilityError(error: any): boolean {

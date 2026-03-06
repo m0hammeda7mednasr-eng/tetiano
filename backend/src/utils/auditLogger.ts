@@ -5,6 +5,7 @@ type JsonRecord = Record<string, unknown>;
 
 interface AuditLogInput {
   userId?: string | null;
+  storeId?: string | null;
   action: string;
   tableName: string;
   recordId?: string | null;
@@ -54,6 +55,7 @@ export async function logAuditEvent(input: AuditLogInput): Promise<void> {
 
     const payload = {
       user_id: input.userId || null,
+      store_id: input.storeId || null,
       action: input.action,
       table_name: input.tableName,
       record_id: safeRecordId,
@@ -68,12 +70,24 @@ export async function logAuditEvent(input: AuditLogInput): Promise<void> {
       },
     };
 
-    const { error } = await supabase.from("audit_logs").insert(payload);
-    if (error) {
+    let result = await supabase.from("audit_logs").insert(payload);
+    if (result.error) {
+      const text = `${result.error.message || ""} ${result.error.details || ""} ${result.error.hint || ""}`.toLowerCase();
+      const storeColumnMissing =
+        text.includes("store_id") &&
+        (text.includes("column") || text.includes("schema cache") || text.includes("does not exist"));
+      if (storeColumnMissing) {
+        const fallbackPayload = { ...payload };
+        delete (fallbackPayload as any).store_id;
+        result = await supabase.from("audit_logs").insert(fallbackPayload);
+      }
+    }
+
+    if (result.error) {
       logger.warn("Audit log insert failed", {
         action: input.action,
         tableName: input.tableName,
-        error: error.message,
+        error: result.error.message,
       });
     }
   } catch (error: any) {

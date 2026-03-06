@@ -2,13 +2,19 @@ import { Request, Response, NextFunction } from "express";
 import { supabase } from "../config/supabase";
 import { logger } from "../utils/logger";
 
-const TEAM_PERMISSIONS_ENABLED = process.env.TEAM_PERMISSIONS_ENABLED === "true";
+export type PlatformRole = "user";
+export type StoreRole = "admin" | "manager" | "staff" | "viewer";
+export type LegacyRole = "admin" | "manager" | "staff";
 
 export interface AuthRequest extends Request {
   user?: {
     id: string;
     email?: string;
-    role?: "admin" | "manager" | "staff";
+    role?: LegacyRole;
+    platformRole: PlatformRole;
+    storeId: string | null;
+    storeRole: StoreRole | null;
+    membershipId: string | null;
     profile?: any;
     permissions?: Record<string, boolean> | null;
   };
@@ -50,13 +56,40 @@ function coercePermissionMap(value: unknown): Record<string, boolean> {
   return {};
 }
 
-function buildRoleFallbackPermissions(role: "admin" | "manager" | "staff"): Record<string, boolean> {
-  if (role === "admin") {
-    return {};
+function buildStoreRoleFallbackPermissions(storeRole: StoreRole | null): Record<string, boolean> {
+  if (storeRole === "admin") {
+    return {
+      "users.manage": true,
+      "users.invite": true,
+      "users.assign_role": true,
+      "products.manage": true,
+      "inventory.manage": true,
+      "orders.manage": true,
+      "reports.view": true,
+      "reports.create": true,
+      "shopify.manage": true,
+      "notifications.view": true,
+      "finance.view_cost": true,
+      "finance.view_profit": true,
+      can_view_inventory: true,
+      can_edit_inventory: true,
+      can_view_orders: true,
+      can_submit_reports: true,
+      can_view_reports: true,
+      can_manage_users: true,
+      can_manage_team: true,
+      can_view_finance: true,
+    };
   }
 
-  if (role === "manager") {
+  if (storeRole === "manager") {
     return {
+      "products.manage": true,
+      "inventory.manage": true,
+      "orders.manage": true,
+      "reports.view": true,
+      "reports.create": true,
+      "notifications.view": true,
       can_view_inventory: true,
       can_edit_inventory: true,
       can_view_orders: true,
@@ -65,7 +98,25 @@ function buildRoleFallbackPermissions(role: "admin" | "manager" | "staff"): Reco
     };
   }
 
+  if (storeRole === "viewer") {
+    return {
+      "products.view": true,
+      "inventory.view": true,
+      "orders.view": true,
+      "reports.view": true,
+      "notifications.view": true,
+      can_view_inventory: true,
+      can_view_orders: true,
+      can_view_reports: true,
+    };
+  }
+
   return {
+    "products.view": true,
+    "inventory.view": true,
+    "orders.view": true,
+    "reports.create": true,
+    "notifications.view": true,
     can_view_inventory: true,
     can_submit_reports: true,
   };
@@ -79,6 +130,35 @@ function mergePermissionMaps(...maps: Array<Record<string, boolean> | null>): Re
   }, {});
 
   return Object.keys(merged).length > 0 ? merged : null;
+}
+
+function normalizeStoreRole(inputRole: unknown): StoreRole | null {
+  const role = typeof inputRole === "string" ? inputRole.toLowerCase() : "";
+  if (role === "owner" || role === "admin") return "admin";
+  if (role === "manager") return "manager";
+  if (role === "viewer") return "viewer";
+  if (role === "staff" || role === "operator" || role === "user" || role === "member") return "staff";
+  return null;
+}
+
+function toLegacyRole(storeRole: StoreRole | null): LegacyRole {
+  if (storeRole === "admin") return "admin";
+  if (storeRole === "manager") return "manager";
+  return "staff";
+}
+
+function buildOverridePermissionMap(
+  rows: Array<{ permission_key?: string | null; allowed?: boolean | null }> | null | undefined,
+): Record<string, boolean> {
+  if (!rows || rows.length === 0) return {};
+
+  const permissions: Record<string, boolean> = {};
+  for (const row of rows) {
+    const key = String(row?.permission_key || "").trim();
+    if (!key) continue;
+    permissions[key] = row?.allowed === true;
+  }
+  return permissions;
 }
 
 export const authenticate = async (
@@ -104,6 +184,8 @@ export const authenticate = async (
     }
 
     const profileSelectVariants = [
+      "id, full_name, role, is_active, avatar_color, permissions, store_id, primary_brand_id, platform_role",
+      "id, full_name, role, is_active, avatar_color, permissions, store_id, primary_brand_id",
       "id, full_name, role, is_active, avatar_color, permissions",
       "id, full_name, role, is_active, avatar_color",
     ];
@@ -139,42 +221,62 @@ export const authenticate = async (
       return res.status(403).json({ error: "This account is disabled" });
     }
 
-    const normalizedRole = normalizeRole(profile?.role);
+    const profileStoreRole = normalizeStoreRole(profile?.role);
     const profilePermissions = coercePermissionMap(profile?.permissions);
-    const hasProfilePermissions = Object.keys(profilePermissions).length > 0;
+    const hasProfilePermissions = Object.keys(profilePermissions).length > 0 ? profilePermissions : null;
 
-    let teamPermissions: Record<string, boolean> | null = null;
-    if (TEAM_PERMISSIONS_ENABLED && normalizedRole !== "admin" && !hasProfilePermissions) {
-      const { data: membership, error: membershipError } = await supabase
-        .from("team_members")
-        .select("team_id, role")
-        .eq("user_id", user.id)
-        .limit(1)
-        .maybeSingle();
+    let storeId: string | null =
+      (profile?.store_id as string | undefined) ||
+      (profile?.primary_brand_id as string | undefined) ||
+      null;
+    let storeRole: StoreRole | null = profileStoreRole;
+    let membershipId: string | null = null;
 
-      if (membershipError && !isSchemaCompatibilityError(membershipError)) {
-        logger.error("Team membership lookup failed", { error: membershipError.message });
-        return res.status(500).json({ error: "Failed to load user team membership" });
+    const membershipResult = await supabase
+      .from("store_memberships")
+      .select("id, store_id, store_role, status")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (!membershipResult.error) {
+      const membership = membershipResult.data;
+      if (membership && membership.status !== "inactive") {
+        membershipId = String(membership.id);
+        storeId = String(membership.store_id);
+        storeRole = normalizeStoreRole(membership.store_role);
+      }
+    } else if (!isSchemaCompatibilityError(membershipResult.error)) {
+      logger.error("Store membership lookup failed", { error: membershipResult.error.message });
+      return res.status(500).json({ error: "Failed to load user store membership" });
+    }
+
+    let overridePermissions: Record<string, boolean> | null = null;
+    if (membershipId) {
+      const { data, error } = await supabase
+        .from("store_permissions_overrides")
+        .select("permission_key, allowed")
+        .eq("membership_id", membershipId);
+
+      if (error && !isSchemaCompatibilityError(error)) {
+        logger.error("Store permission overrides lookup failed", { error: error.message });
+        return res.status(500).json({ error: "Failed to load user permission overrides" });
       }
 
-      if (membership?.team_id) {
-        const { data: rawTeamPermissions, error: teamPermissionsError } = await supabase
-          .from("team_permissions")
-          .select("*")
-          .eq("team_id", membership.team_id)
-          .maybeSingle();
-
-        if (teamPermissionsError && !isSchemaCompatibilityError(teamPermissionsError)) {
-          logger.error("Team permissions lookup failed", { error: teamPermissionsError.message });
-          return res.status(500).json({ error: "Failed to load team permissions" });
-        }
-
-        teamPermissions = coercePermissionMap(rawTeamPermissions);
+      overridePermissions = buildOverridePermissionMap(
+        (data || []) as Array<{ permission_key?: string | null; allowed?: boolean | null }>,
+      );
+      if (Object.keys(overridePermissions).length === 0) {
+        overridePermissions = null;
       }
     }
 
-    const roleFallbackPermissions = buildRoleFallbackPermissions(normalizedRole);
-    const permissions = mergePermissionMaps(profilePermissions, teamPermissions, roleFallbackPermissions);
+    const legacyRole = toLegacyRole(storeRole);
+    const roleFallbackPermissions = buildStoreRoleFallbackPermissions(storeRole);
+    const permissions = mergePermissionMaps(
+      hasProfilePermissions,
+      overridePermissions,
+      roleFallbackPermissions,
+    );
     if (permissions?.can_adjust_inventory && permissions.can_edit_inventory === undefined) {
       permissions.can_edit_inventory = true;
     }
@@ -182,7 +284,11 @@ export const authenticate = async (
     req.user = {
       id: user.id,
       email: user.email,
-      role: normalizedRole,
+      role: legacyRole,
+      platformRole: "user",
+      storeId,
+      storeRole,
+      membershipId,
       profile,
       permissions,
     };
@@ -200,7 +306,6 @@ export const requireRole = (...roles: string[]) => {
       return res.status(401).json({ error: "Unauthenticated" });
     }
 
-    // Admin can pass any role guard.
     if (req.user.role === "admin") {
       return next();
     }
@@ -231,16 +336,62 @@ export const requirePermission = (permission: string) => {
   };
 };
 
-function normalizeRole(inputRole: string | undefined): "admin" | "manager" | "staff" {
-  if (!inputRole) return "staff";
+export const requirePlatformRole = (...roles: PlatformRole[]) => {
+  return async (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthenticated" });
+    }
 
-  if (inputRole === "admin" || inputRole === "owner") {
-    return "admin";
-  }
+    if (!roles.includes(req.user.platformRole)) {
+      return res.status(403).json({ error: "Forbidden platform role" });
+    }
 
-  if (inputRole === "manager") {
-    return "manager";
-  }
+    return next();
+  };
+};
 
-  return "staff";
-}
+export const requireStoreContext = () => {
+  return async (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthenticated" });
+    }
+
+    if (!req.user.storeId) {
+      return res.status(403).json({ error: "No store is linked to this account" });
+    }
+
+    return next();
+  };
+};
+
+export const requireStoreRole = (...roles: StoreRole[]) => {
+  return async (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthenticated" });
+    }
+
+    if (!req.user.storeRole || !roles.includes(req.user.storeRole)) {
+      return res.status(403).json({ error: "Forbidden store role" });
+    }
+
+    return next();
+  };
+};
+
+export const requireStorePermission = (permissionKey: string) => {
+  return async (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthenticated" });
+    }
+
+    if (!req.user.storeId) {
+      return res.status(403).json({ error: "No store is linked to this account" });
+    }
+
+    if (!req.user.permissions?.[permissionKey]) {
+      return res.status(403).json({ error: "Missing required permission" });
+    }
+
+    return next();
+  };
+};

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuthStore } from "../store/authStore";
-import { Mail, Lock, User, UserPlus, CheckCircle } from "lucide-react";
+import { Mail, Lock, User, UserPlus } from "lucide-react";
 
 export default function Signup() {
   const [email, setEmail] = useState("");
@@ -20,8 +20,12 @@ export default function Signup() {
     try {
       await signUp(email, password, fullName);
       await refreshProfile();
-      const { user, isAdmin } = useAuthStore.getState();
-      navigate(user ? (isAdmin ? "/admin/dashboard" : "/") : "/login");
+      const { user } = useAuthStore.getState();
+      if (!user) {
+        navigate("/login");
+        return;
+      }
+      navigate("/settings");
     } catch (err: any) {
       setError(err.message || "فشل إنشاء الحساب. حاول مرة أخرى.");
     } finally {
@@ -40,10 +44,7 @@ export default function Signup() {
             Tetiano
           </h1>
           <h2 className="mt-4 text-2xl font-bold text-gray-900">إنشاء حساب جديد</h2>
-          <p className="mt-2 text-sm text-gray-500 font-medium">
-            أي حساب جديد عبر صفحة التسجيل يُعيَّن كـ أدمن تلقائيًا. حسابات الموظفين تُنشأ من
-            لوحة الأدمن، ويتم توجيههم مباشرة للداشبورد المرتبط بحسابهم.
-          </p>
+          <p className="mt-2 text-sm text-gray-500 font-medium">كل حساب جديد يتم إنشاء متجر مستقل له تلقائيًا، ثم تربطه بـ Shopify وتبدأ إدارة بياناتك.</p>
         </div>
 
         <div className="bg-white p-8 rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100">
@@ -124,8 +125,8 @@ export default function Signup() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="block w-full pr-11 pl-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-medium placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 focus:bg-white transition-all"
-                    placeholder="6 أحرف على الأقل"
-                    minLength={6}
+                    placeholder="8 characters minimum"
+                    minLength={8}
                   />
                 </div>
               </div>
@@ -147,10 +148,7 @@ export default function Signup() {
             </button>
 
             <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-3">
-              <p className="text-xs font-bold text-emerald-700 flex items-center gap-2">
-                <CheckCircle className="w-4 h-4" />
-                بعد التسجيل سيتم توجيهك تلقائيًا حسب صلاحيتك.
-              </p>
+              <p className="text-xs font-bold text-emerald-700 flex items-center gap-2">بعد إنشاء الحساب سنجهز متجرك الفارغ تلقائيًا لتبدأ الربط والمزامنة مباشرة.</p>
             </div>
 
             <div className="text-center pt-2">

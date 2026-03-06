@@ -26,7 +26,7 @@ export default function StockAdjustModal({ variant, onClose, onSuccess }: Props)
     if (newStock < 0) { setError('لا يمكن أن يكون المخزون الناتج سالباً'); return; }
     setLoad(true); setError('');
     try {
-      await api.post(`/api/inventory/${variant.id}/adjust`, { delta, reason: reason.trim() });
+      await api.patch(`/api/app/variants/${variant.id}/stock`, { delta, reason: reason.trim() });
       onSuccess();
     } catch (err: any) {
       setError(err.response?.data?.error || 'فشل في تعديل المخزون');

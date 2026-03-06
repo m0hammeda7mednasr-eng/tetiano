@@ -31,7 +31,7 @@ export default function StockLedgerModal({ variant, onClose }: Props) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get(`/api/inventory/${variant.id}/movements`)
+    api.get(`/api/app/variants/${variant.id}/movements`)
       .then(({ data }) => setMovements(data.movements || []))
       .catch(console.error)
       .finally(() => setLoading(false));

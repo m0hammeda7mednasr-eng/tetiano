@@ -56,37 +56,27 @@ export const API_ENDPOINTS = {
     LOGOUT: "/auth/logout",
   },
   INVENTORY: {
-    LIST: "/api/inventory",
-    GET: (id: string) => `/api/inventory/${id}`,
-    ADJUST: (id: string) => `/api/inventory/${id}/adjust`,
-    MOVEMENTS: (id: string) => `/api/inventory/${id}/movements`,
+    LIST: "/api/app/products",
+    GET: (id: string) => `/api/app/products/${id}`,
+    ADJUST: (id: string) => `/api/app/variants/${id}/stock`,
+    MOVEMENTS: (id: string) => `/api/app/variants/${id}/movements`,
   },
   REPORTS: {
-    LIST: "/api/reports",
-    CREATE: "/api/reports",
-    GET: (id: string) => `/api/reports/${id}`,
-  },
-  TEAMS: {
-    LIST: "/api/teams",
-    CREATE: "/api/teams",
-    GET: (id: string) => `/api/teams/${id}`,
-    UPDATE: (id: string) => `/api/teams/${id}`,
+    LIST: "/api/app/reports",
+    CREATE: "/api/app/reports",
+    GET: (id: string) => `/api/app/reports/${id}`,
   },
   USERS: {
-    PROFILE: "/api/users/profile",
-    UPDATE: "/api/users/profile",
-    PREFERENCES: "/api/users/preferences",
-  },
-  ADMIN: {
-    USERS: "/api/admin/users",
-    TEAMS: "/api/admin/teams",
-    BRANDS: "/api/admin/brands",
+    LIST: "/api/app/users",
+    CREATE: "/api/app/users",
+    UPDATE_ROLE: (id: string) => `/api/app/users/${id}/role`,
+    UPDATE_STATUS: (id: string) => `/api/app/users/${id}/status`,
   },
   SHOPIFY: {
-    AUTH: "/api/shopify/auth",
+    AUTH: "/api/app/shopify/connect",
     CALLBACK: "/api/shopify/callback",
-    STATUS: (brandId: string) => `/api/shopify/status/${brandId}`,
-    DISCONNECT: (brandId: string) => `/api/shopify/disconnect/${brandId}`,
+    STATUS: "/api/app/shopify/status",
+    DISCONNECT: "/api/app/shopify/disconnect",
   },
 };
 
@@ -99,7 +89,7 @@ export const MODAL_ANIMATIONS = {
 
 export const VALIDATION = {
   EMAIL_REGEX: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
-  MIN_PASSWORD_LENGTH: 6,
+  MIN_PASSWORD_LENGTH: 8,
   MIN_USERNAME_LENGTH: 2,
   MAX_USERNAME_LENGTH: 50,
 };

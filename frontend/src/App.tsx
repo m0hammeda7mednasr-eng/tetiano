@@ -12,10 +12,6 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import UserManagement from "./pages/admin/UserManagement";
-import TeamManagement from "./pages/admin/TeamManagement";
-import AdminReports from "./pages/admin/AdminReports";
-import ShopifySettings from "./pages/admin/ShopifySettings";
-import AuditLogs from "./pages/admin/AuditLogs";
 import ShopifyGuide from "./pages/ShopifyGuide";
 import ShopifyCallbackPage from "./pages/ShopifyCallbackPage";
 import NotFound from "./pages/NotFound";
@@ -107,10 +103,6 @@ function PermRoute({
 }
 
 function HomeRoute() {
-  const { isAdmin } = useAuthStore();
-  if (isAdmin) {
-    return <Navigate to="/admin/dashboard" replace />;
-  }
   return <Dashboard />;
 }
 
@@ -197,38 +189,6 @@ function App() {
               element={
                 <AdminRoute>
                   <UserManagement />
-                </AdminRoute>
-              }
-            />
-            <Route
-              path="admin/teams"
-              element={
-                <AdminRoute>
-                  <TeamManagement />
-                </AdminRoute>
-              }
-            />
-            <Route
-              path="admin/reports"
-              element={
-                <AdminRoute>
-                  <AdminReports />
-                </AdminRoute>
-              }
-            />
-            <Route
-              path="admin/shopify"
-              element={
-                <AdminRoute>
-                  <ShopifySettings />
-                </AdminRoute>
-              }
-            />
-            <Route
-              path="admin/audit"
-              element={
-                <AdminRoute>
-                  <AuditLogs />
                 </AdminRoute>
               }
             />

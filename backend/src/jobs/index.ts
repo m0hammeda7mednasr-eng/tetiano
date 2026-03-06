@@ -2,6 +2,17 @@ import cron from 'node-cron';
 import { supabase } from '../config/supabase';
 import { logger } from '../utils/logger';
 
+function isSchemaCompatibilityError(error: any): boolean {
+  const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    text.includes("column") ||
+    text.includes("relation") ||
+    text.includes("does not exist") ||
+    text.includes("schema cache") ||
+    text.includes("unknown relationship")
+  );
+}
+
 // Daily report reminder job - runs at 18:00 Africa/Cairo
 export const dailyReportReminder = async () => {
   try {
@@ -9,61 +20,86 @@ export const dailyReportReminder = async () => {
 
     const today = new Date().toISOString().split('T')[0];
 
-    // Get all active team members
-    const { data: members, error: membersError } = await supabase
-      .from('team_members')
-      .select(
-        `
-        user_id,
-        team_id,
-        user_profiles(full_name)
-      `
-      );
+    const membersResult = await supabase
+      .from('store_memberships')
+      .select('user_id, store_id, status')
+      .eq('status', 'active');
 
-    if (membersError) {
-      throw membersError;
+    if (membersResult.error) {
+      if (isSchemaCompatibilityError(membersResult.error)) {
+        logger.warn('store_memberships table is not ready, skipping daily reminder job');
+        return;
+      }
+      throw membersResult.error;
     }
+    const members = (membersResult.data || []) as Array<{ user_id: string; store_id: string; status: string }>;
 
     if (!members || members.length === 0) {
-      logger.info('No team members found');
+      logger.info('No active members found');
       return;
     }
 
     // Get today's reports
-    const { data: reports, error: reportsError } = await supabase
+    const reportsResult = await supabase
+      .from('reports')
+      .select('author_user_id')
+      .eq('report_date', today);
+
+    let submittedUserIds = new Set<string>();
+    if (!reportsResult.error) {
+      submittedUserIds = new Set((reportsResult.data || []).map((r: any) => String(r.author_user_id)));
+    } else if (!isSchemaCompatibilityError(reportsResult.error)) {
+      throw reportsResult.error;
+    } else {
+      const { data: reports, error: reportsError } = await supabase
       .from('daily_reports')
       .select('user_id')
       .eq('report_date', today);
 
-    if (reportsError) {
-      throw reportsError;
-    }
+      if (reportsError) {
+        throw reportsError;
+      }
 
-    const submittedUserIds = new Set(reports?.map((r) => r.user_id) || []);
+      submittedUserIds = new Set(reports?.map((r) => r.user_id) || []);
+    }
 
     // Find users who haven't submitted
     const missingReports = members.filter(
-      (member) => !submittedUserIds.has(member.user_id)
+      (member) => !submittedUserIds.has(String(member.user_id))
     );
 
     logger.info(`Found ${missingReports.length} users without reports`);
 
     // Create notifications for missing reports
     for (const member of missingReports) {
-      const { error: notifError } = await supabase
+      let notifResult = await supabase
         .from('notifications')
         .insert({
           user_id: member.user_id,
+          store_id: member.store_id,
           type: 'daily_report_reminder',
-          title: 'Daily Report Reminder',
-          message: `Please submit your daily report for ${today}. What did you accomplish today?`,
-          read: false,
+          title: 'تذكير التقرير اليومي',
+          body: `من فضلك ارفع تقرير ${today} اليوم.`,
+          is_read: false,
+          metadata_json: { report_date: today },
         });
 
-      if (notifError) {
+      if (notifResult.error && isSchemaCompatibilityError(notifResult.error)) {
+        notifResult = await supabase
+          .from('notifications')
+          .insert({
+            user_id: member.user_id,
+            type: 'daily_report_reminder',
+            title: 'Daily Report Reminder',
+            message: `Please submit your daily report for ${today}.`,
+            read: false,
+          });
+      }
+
+      if (notifResult.error) {
         logger.error('Failed to create notification', {
           userId: member.user_id,
-          error: notifError,
+          error: notifResult.error,
         });
       } else {
         logger.info('Notification created', { userId: member.user_id });

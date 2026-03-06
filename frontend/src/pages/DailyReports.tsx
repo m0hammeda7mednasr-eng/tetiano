@@ -18,10 +18,15 @@ export default function DailyReports() {
   const checkStatus = async () => {
     setChecking(true);
     try {
-      const { data } = await api.get('/api/reports/status/today');
+      const modern = await api.get('/api/app/reports/status/today');
+      const data: any = modern.data;
       setStatus(data);
       if (data.submitted && data.report) {
-        setForm({ done_today: data.report.done_today, blockers: data.report.blockers || '', plan_tomorrow: data.report.plan_tomorrow });
+        setForm({
+          done_today: data.report.done_today || data.report.body_text || '',
+          blockers: data.report.blockers || '',
+          plan_tomorrow: data.report.plan_tomorrow || '',
+        });
       }
     } catch { /* silent */ }
     finally { setChecking(false); }
@@ -31,7 +36,7 @@ export default function DailyReports() {
     e.preventDefault();
     setLoading(true); setError(''); setSuccess('');
     try {
-      await api.post('/api/reports', form);
+      await api.post('/api/app/reports', form);
       setSuccess('تم إرسال التقرير بنجاح! 🎉');
       checkStatus();
     } catch (err: any) {

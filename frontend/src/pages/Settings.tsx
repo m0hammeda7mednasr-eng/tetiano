@@ -1,253 +1,163 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import api from '../lib/api';
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import api from "../lib/api";
 import {
-  Activity,
   AlertTriangle,
   ArrowRight,
   CheckCircle,
   Copy,
-  Database,
   ExternalLink,
   Eye,
   EyeOff,
   Globe,
   Info,
   Key,
-  Link2,
-  Lock,
   Plus,
   RefreshCw,
-  Server,
   Settings as SettingsIcon,
-  Shield,
   ShoppingBag,
   Store,
   Unlink,
-  Wifi,
-  WifiOff,
   X,
-  Zap,
-} from 'lucide-react';
+} from "lucide-react";
 
-interface Brand {
-  id: string;
-  name: string;
-  shopify_domain: string;
-  shopify_location_id?: string;
-  shopify_scopes?: string;
-  connected_at?: string;
-  last_sync_at?: string | null;
-  is_active?: boolean;
+interface ShopifyStatus {
+  connected: boolean;
+  status: "connected" | "disconnected" | "error" | string;
+  shop_domain: string;
+  scopes?: string;
+  connected_at?: string | null;
+  updated_at?: string | null;
 }
-
-type ServiceHealth = 'online' | 'degraded' | 'offline';
 
 function normalizeShopDomain(input: string): string {
-  const normalized = input.trim().toLowerCase().replace(/^https?:\/\//, '');
-  if (!normalized) return '';
-  return normalized.endsWith('.myshopify.com') ? normalized : `${normalized}.myshopify.com`;
-}
-
-function healthBadgeClass(status: ServiceHealth): string {
-  if (status === 'online') return 'badge-green';
-  if (status === 'degraded') return 'badge-blue';
-  return 'badge-red';
-}
-
-function healthLabel(status: ServiceHealth): string {
-  if (status === 'online') return 'متصل';
-  if (status === 'degraded') return 'جزئي';
-  return 'غير متاح';
+  const normalized = input.trim().toLowerCase().replace(/^https?:\/\//, "");
+  if (!normalized) return "";
+  return normalized.endsWith(".myshopify.com") ? normalized : `${normalized}.myshopify.com`;
 }
 
 export default function Settings() {
-  const apiBaseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3002').replace(/\/+$/, '');
+  const apiBaseUrl = (import.meta.env.VITE_API_URL || "http://localhost:3002").replace(/\/+$/, "");
   const shopifyRedirectUri = `${apiBaseUrl}/api/shopify/callback`;
 
-  const [brands, setBrands] = useState<Brand[]>([]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [status, setStatus] = useState<ShopifyStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState<string | null>(null);
-  const [disconnecting, setDisconnecting] = useState<string | null>(null);
-  const [webhooking, setWebhooking] = useState<string | null>(null);
-  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
-  const [serviceHealth, setServiceHealth] = useState<{
-    supabase: ServiceHealth;
-    backend: ServiceHealth;
-    webhooks: ServiceHealth;
-    webhookEvents: number;
-  }>({
-    supabase: 'offline',
-    backend: 'offline',
-    webhooks: 'offline',
-    webhookEvents: 0,
-  });
+  const [syncing, setSyncing] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
 
   const [showOAuth, setShowOAuth] = useState(false);
   const [oauthStep, setOauthStep] = useState<1 | 2>(1);
   const [oauthLoading, setOauthLoading] = useState(false);
-  const [oauthForm, setOauthForm] = useState({ shop: '', api_key: '', api_secret: '' });
-  const [oauthError, setOauthError] = useState('');
+  const [oauthError, setOauthError] = useState("");
   const [showSecret, setShowSecret] = useState(false);
-
-  const [searchParams, setSearchParams] = useSearchParams();
-
-  const activeBrands = useMemo(
-    () => brands.filter((brand) => brand.is_active !== false),
-    [brands],
-  );
-  const inactiveBrands = useMemo(
-    () => brands.filter((brand) => brand.is_active === false),
-    [brands],
-  );
+  const [oauthForm, setOauthForm] = useState({ shop: "", api_key: "", api_secret: "" });
 
   useEffect(() => {
-    const oauth = searchParams.get('oauth');
-    const legacyConnected = searchParams.get('connected');
-    const brand = searchParams.get('brand');
-    const msg = searchParams.get('msg');
+    const oauth = searchParams.get("oauth");
+    const msg = searchParams.get("msg");
 
-    if (legacyConnected === 'true' || oauth === 'success') {
-      setMessage({
-        type: 'success',
-        text: `تم ربط متجر "${brand || 'Shopify'}" بنجاح.`,
-      });
-      fetchBrands();
-    } else if (oauth === 'declined') {
-      setMessage({ type: 'error', text: 'تم إلغاء عملية الربط من Shopify.' });
-    } else if (oauth === 'error') {
-      setMessage({ type: 'error', text: `فشل الربط: ${msg || 'خطأ غير معروف'}` });
-    } else if (oauth === 'invalid_state') {
-      setMessage({ type: 'error', text: 'طلب OAuth غير صالح. حاول مرة أخرى.' });
-    } else if (oauth === 'hmac_error') {
-      setMessage({ type: 'error', text: 'فشل التحقق من Shopify. تأكد من API Secret.' });
+    if (oauth === "success") {
+      setMessage({ type: "success", text: "تم ربط متجر Shopify بنجاح." });
+      fetchStatus();
+    } else if (oauth === "declined") {
+      setMessage({ type: "error", text: "تم إلغاء عملية الربط من Shopify." });
+    } else if (oauth === "error") {
+      setMessage({ type: "error", text: `فشل الربط: ${msg || "خطأ غير معروف"}` });
     }
 
-    if (oauth || legacyConnected) {
+    if (oauth) {
       setSearchParams({}, { replace: true });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    fetchBrands();
+    fetchStatus();
   }, []);
 
-  const fetchBrands = async () => {
+  const scopes = useMemo(() => {
+    return (status?.scopes || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }, [status?.scopes]);
+
+  const fetchStatus = async () => {
     setLoading(true);
-
-    let nextBrands: Brand[] = [];
-    let backendStatus: ServiceHealth = 'offline';
-    let dbStatus: ServiceHealth = 'offline';
-
     try {
-      const { data } = await api.get('/api/shopify/brands');
-      nextBrands = data?.brands || [];
-      backendStatus = 'online';
-      dbStatus = 'online';
-    } catch {
-      backendStatus = 'offline';
-      dbStatus = 'offline';
-      nextBrands = [];
-    }
-
-    setBrands(nextBrands);
-
-    const connectedCount = nextBrands.filter((brand) => brand.is_active !== false).length;
-    if (connectedCount === 0) {
-      setServiceHealth({
-        supabase: dbStatus,
-        backend: backendStatus,
-        webhooks: 'offline',
-        webhookEvents: 0,
+      const { data } = await api.get("/api/app/shopify/status");
+      setStatus({
+        connected: Boolean(data?.connected),
+        status: data?.status || "disconnected",
+        shop_domain: data?.shop_domain || "",
+        scopes: data?.scopes || "",
+        connected_at: data?.connected_at || null,
+        updated_at: data?.updated_at || null,
       });
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const { data } = await api.get('/api/orders/webhooks/recent');
-      const webhookEvents = Array.isArray(data?.events) ? data.events.length : 0;
-      setServiceHealth({
-        supabase: dbStatus,
-        backend: backendStatus,
-        webhooks: webhookEvents > 0 ? 'online' : 'degraded',
-        webhookEvents,
+    } catch (err: any) {
+      setMessage({
+        type: "error",
+        text: err?.response?.data?.error || "فشل تحميل حالة Shopify.",
       });
-    } catch {
-      setServiceHealth({
-        supabase: dbStatus,
-        backend: backendStatus,
-        webhooks: backendStatus === 'online' ? 'degraded' : 'offline',
-        webhookEvents: 0,
-      });
+      setStatus(null);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSync = async (brandId: string) => {
-    setSyncing(brandId);
+  const handleSync = async () => {
+    setSyncing(true);
     setMessage(null);
     try {
-      const { data } = await api.post(`/api/inventory/sync-brand/${brandId}`);
-      setMessage({ type: 'success', text: data?.message || 'تمت المزامنة بنجاح.' });
-      await fetchBrands();
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err?.response?.data?.error || 'فشلت المزامنة.' });
-    } finally {
-      setSyncing(null);
-    }
-  };
-
-  const handleDisconnect = async (brandId: string) => {
-    if (!confirm('هل تريد فصل هذا المتجر؟')) return;
-    setDisconnecting(brandId);
-    try {
-      await api.post(`/api/shopify/disconnect/${brandId}`);
-      setMessage({ type: 'info', text: 'تم فصل المتجر بنجاح.' });
-      await fetchBrands();
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err?.response?.data?.error || 'فشل فصل المتجر.' });
-    } finally {
-      setDisconnecting(null);
-    }
-  };
-
-  const handleSetupWebhooks = async (brandId: string) => {
-    setWebhooking(brandId);
-    try {
-      const { data } = await api.post(`/api/shopify/setup-webhooks/${brandId}`);
+      const { data } = await api.post("/api/app/shopify/sync/full", { wipe_existing_data: true });
+      const summary = data?.summary || {};
       setMessage({
-        type: 'success',
-        text: data?.message || 'تم إعداد Webhooks بنجاح.',
+        type: "success",
+        text: `تمت المزامنة بنجاح: منتجات ${summary.products || 0} - عملاء ${summary.customers || 0} - طلبات ${summary.orders || 0}`,
       });
-      await fetchBrands();
+      await fetchStatus();
     } catch (err: any) {
-      setMessage({ type: 'error', text: err?.response?.data?.error || 'فشل إعداد Webhooks.' });
+      setMessage({ type: "error", text: err?.response?.data?.error || "فشلت المزامنة." });
     } finally {
-      setWebhooking(null);
+      setSyncing(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    if (!confirm("هل تريد فصل متجر Shopify؟")) return;
+    setDisconnecting(true);
+    setMessage(null);
+    try {
+      await api.post("/api/app/shopify/disconnect");
+      setMessage({ type: "info", text: "تم فصل متجر Shopify بنجاح." });
+      await fetchStatus();
+    } catch (err: any) {
+      setMessage({ type: "error", text: err?.response?.data?.error || "فشل فصل المتجر." });
+    } finally {
+      setDisconnecting(false);
     }
   };
 
   const handleOAuthConnect = async () => {
-    setOauthError('');
+    setOauthError("");
 
     const normalizedShop = normalizeShopDomain(oauthForm.shop);
-    if (!normalizedShop) return setOauthError('أدخل عنوان المتجر.');
-    if (!oauthForm.api_key.trim()) return setOauthError('أدخل API Key.');
-    if (!oauthForm.api_secret.trim()) return setOauthError('أدخل API Secret.');
+    if (!normalizedShop) return setOauthError("أدخل عنوان المتجر.");
+    if (!oauthForm.api_key.trim()) return setOauthError("أدخل API Key.");
+    if (!oauthForm.api_secret.trim()) return setOauthError("أدخل API Secret.");
 
     setOauthLoading(true);
     try {
-      const { data } = await api.post('/api/shopify/get-install-url', {
+      const { data } = await api.post("/api/app/shopify/connect", {
         shop: normalizedShop,
         api_key: oauthForm.api_key.trim(),
         api_secret: oauthForm.api_secret.trim(),
       });
-
-      window.location.href = data.installUrl;
+      window.location.href = data.install_url || data.installUrl;
     } catch (err: any) {
-      setOauthError(err?.response?.data?.error || 'تعذر بدء الربط مع Shopify.');
+      setOauthError(err?.response?.data?.error || "تعذر بدء الربط مع Shopify.");
       setOauthLoading(false);
     }
   };
@@ -255,32 +165,19 @@ export default function Settings() {
   const copyRedirectUri = async () => {
     try {
       await navigator.clipboard.writeText(shopifyRedirectUri);
-      setMessage({ type: 'success', text: 'تم نسخ Redirect URI.' });
+      setMessage({ type: "success", text: "تم نسخ Redirect URI." });
     } catch {
-      setMessage({ type: 'info', text: shopifyRedirectUri });
+      setMessage({ type: "info", text: shopifyRedirectUri });
     }
   };
 
   const openModal = () => {
-    setOauthForm({ shop: '', api_key: '', api_secret: '' });
-    setOauthError('');
+    setOauthForm({ shop: "", api_key: "", api_secret: "" });
+    setOauthError("");
     setOauthStep(1);
     setShowSecret(false);
     setShowOAuth(true);
   };
-
-  const SkeletonCard = () => (
-    <div className="card p-5">
-      <div className="flex items-center gap-3 mb-4">
-        <div className="skeleton w-12 h-12 rounded-xl" />
-        <div className="space-y-2 flex-1">
-          <div className="skeleton h-4 w-28 rounded" />
-          <div className="skeleton h-3 w-40 rounded" />
-        </div>
-      </div>
-      <div className="skeleton h-10 rounded-xl" />
-    </div>
-  );
 
   return (
     <div className="space-y-8 anim-fade-up">
@@ -290,27 +187,20 @@ export default function Settings() {
             <SettingsIcon className="w-4 h-4 text-brand-500" />
             <span className="section-label">Settings</span>
           </div>
-          <h1 className="page-title">الإعدادات والتكامل</h1>
-          <p className="page-subtitle">ربط Shopify وإدارة حالة النظام من مكان واحد</p>
+          <h1 className="page-title">إعدادات Shopify</h1>
+          <p className="page-subtitle">متجر واحد لكل حساب مع عزل كامل للبيانات</p>
         </div>
         <button onClick={openModal} className="btn-shopify">
           <Plus className="w-4 h-4" />
-          ربط متجر Shopify جديد
+          ربط متجر Shopify
         </button>
       </div>
 
       {message && (
-        <div
-          className={`anim-bounce-in ${message.type === 'success'
-            ? 'alert-success'
-            : message.type === 'error'
-              ? 'alert-error'
-              : 'alert-info'
-            }`}
-        >
-          {message.type === 'success' && <CheckCircle className="w-5 h-5 flex-shrink-0" />}
-          {message.type === 'error' && <AlertTriangle className="w-5 h-5 flex-shrink-0" />}
-          {message.type === 'info' && <Info className="w-5 h-5 flex-shrink-0" />}
+        <div className={`${message.type === "success" ? "alert-success" : message.type === "error" ? "alert-error" : "alert-info"} anim-bounce-in`}>
+          {message.type === "success" && <CheckCircle className="w-5 h-5 flex-shrink-0" />}
+          {message.type === "error" && <AlertTriangle className="w-5 h-5 flex-shrink-0" />}
+          {message.type === "info" && <Info className="w-5 h-5 flex-shrink-0" />}
           <p className="text-sm font-bold flex-1">{message.text}</p>
           <button className="btn-icon p-1" onClick={() => setMessage(null)}>
             <X className="w-4 h-4" />
@@ -318,260 +208,122 @@ export default function Settings() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="card p-4">
-          <p className="text-[11px] text-slate-400 font-bold mb-1">متاجر مرتبطة</p>
-          <p className="text-2xl font-black text-slate-900">{activeBrands.length}</p>
-        </div>
-        <div className="card p-4">
-          <p className="text-[11px] text-slate-400 font-bold mb-1">متاجر غير مفعلة</p>
-          <p className="text-2xl font-black text-slate-900">{inactiveBrands.length}</p>
-        </div>
-        <div className="card p-4">
-          <p className="text-[11px] text-slate-400 font-bold mb-1">Webhook Events (آخر 10)</p>
-          <p className="text-2xl font-black text-slate-900">{serviceHealth.webhookEvents}</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
-        <div className="lg:col-span-3 space-y-5">
-          <div className="flex items-center gap-2">
-            <ShoppingBag className="w-4 h-4 text-shopify-500" />
-            <h2 className="text-base font-black text-slate-800">متاجر Shopify</h2>
-            {activeBrands.length > 0 && <span className="badge badge-shopify">{activeBrands.length}</span>}
-          </div>
-
-          {loading ? (
-            <div className="space-y-4">
-              <SkeletonCard />
-              <SkeletonCard />
-            </div>
-          ) : activeBrands.length === 0 ? (
-            <div className="card p-12 flex flex-col items-center text-center border-dashed">
-              <div className="w-16 h-16 bg-shopify-50 border border-shopify-200 rounded-2xl flex items-center justify-center mb-4">
-                <Store className="w-8 h-8 text-shopify-500" />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-4">
+          <div className="card p-5">
+            {loading ? (
+              <div className="space-y-3">
+                <div className="skeleton h-5 w-44 rounded" />
+                <div className="skeleton h-4 w-72 rounded" />
+                <div className="skeleton h-10 rounded-xl" />
               </div>
-              <h3 className="text-base font-black text-slate-700 mb-2">لا توجد متاجر مرتبطة</h3>
-              <p className="text-sm text-slate-400 mb-5 max-w-xs">
-                ابدأ بربط متجرك الآن وسيتم تفعيل المزامنة والتحديثات الفورية.
-              </p>
-              <button onClick={openModal} className="btn-shopify">
-                <Plus className="w-4 h-4" />
-                ربط متجر الآن
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {activeBrands.map((brand) => (
-                <div key={brand.id} className="card p-5">
-                  <div className="flex items-start justify-between mb-5">
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-shopify-50 border border-shopify-200">
-                        <Store className="w-6 h-6 text-shopify-600" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-base font-black text-slate-800 capitalize leading-none">
-                            {brand.name.replace(/_/g, ' ')}
-                          </h3>
-                          <span className="badge badge-green">
-                            <Wifi className="w-2.5 h-2.5" />
-                            متصل
-                          </span>
-                        </div>
-                        <a
-                          href={`https://${brand.shopify_domain}/admin`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-xs font-semibold text-slate-500 hover:text-brand-600 transition-colors flex items-center gap-1 mt-1"
-                        >
-                          <Globe className="w-3 h-3" />
-                          {brand.shopify_domain}
-                          <ExternalLink className="w-2.5 h-2.5" />
-                        </a>
-                      </div>
-                    </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-shopify-50 border border-shopify-200">
+                    <Store className="w-6 h-6 text-shopify-600" />
                   </div>
+                  <div className="flex-1">
+                    <h3 className="text-base font-black text-slate-800">حالة الربط</h3>
+                    <p className="text-xs text-slate-500">
+                      {status?.connected ? "المتجر متصل ويعمل" : "لا يوجد متجر Shopify متصل"}
+                    </p>
+                  </div>
+                  <span className={`badge ${status?.connected ? "badge-green" : "badge-red"}`}>
+                    {status?.connected ? "متصل" : "غير متصل"}
+                  </span>
+                </div>
 
-                  <div className="grid grid-cols-2 gap-2 mb-4">
+                {status?.connected && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
                     <div className="bg-slate-50 rounded-xl px-3 py-2.5">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">آخر مزامنة</p>
-                      <p className="text-xs font-bold text-slate-700">
-                        {brand.last_sync_at ? new Date(brand.last_sync_at).toLocaleString('ar-EG') : 'لم تتم بعد'}
-                      </p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Shop Domain</p>
+                      <a
+                        href={`https://${status.shop_domain}/admin`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs font-bold text-slate-700 hover:text-brand-600 flex items-center gap-1"
+                      >
+                        <Globe className="w-3 h-3" />
+                        {status.shop_domain}
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
                     </div>
                     <div className="bg-slate-50 rounded-xl px-3 py-2.5">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">تاريخ الربط</p>
                       <p className="text-xs font-bold text-slate-700">
-                        {brand.connected_at ? new Date(brand.connected_at).toLocaleDateString('ar-EG') : '—'}
+                        {status.connected_at ? new Date(status.connected_at).toLocaleString("ar-EG") : "—"}
                       </p>
                     </div>
-                    {brand.shopify_scopes && (
-                      <div className="col-span-2 bg-shopify-50 border border-shopify-100 rounded-xl px-3 py-2.5">
-                        <p className="text-[10px] font-bold text-shopify-500 uppercase tracking-wider mb-1 flex items-center gap-1">
-                          <Key className="w-3 h-3" />
-                          الصلاحيات
-                        </p>
-                        <div className="flex flex-wrap gap-1">
-                          {brand.shopify_scopes
-                            .split(',')
-                            .slice(0, 6)
-                            .map((scope) => (
-                              <span key={scope} className="badge badge-shopify text-[9px]">
-                                {scope.trim()}
-                              </span>
-                            ))}
-                        </div>
-                      </div>
-                    )}
                   </div>
+                )}
 
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleSync(brand.id)}
-                      disabled={syncing === brand.id}
-                      className="btn-success flex-1 justify-center disabled:opacity-50"
-                    >
-                      <RefreshCw className={`w-4 h-4 ${syncing === brand.id ? 'animate-spin' : ''}`} />
-                      {syncing === brand.id ? 'جاري المزامنة...' : 'مزامنة المنتجات'}
-                    </button>
-                    <button
-                      onClick={() => handleSetupWebhooks(brand.id)}
-                      disabled={webhooking === brand.id}
-                      className="btn-secondary disabled:opacity-50"
-                      title="إعداد Webhooks"
-                    >
-                      {webhooking === brand.id ? (
-                        <div className="w-4 h-4 border-2 border-brand-300 border-t-brand-600 rounded-full animate-spin" />
-                      ) : (
-                        <Zap className="w-4 h-4" />
-                      )}
-                    </button>
-                    <button
-                      onClick={() => handleDisconnect(brand.id)}
-                      disabled={disconnecting === brand.id}
-                      className="btn-danger"
-                      title="فصل المتجر"
-                    >
-                      <Unlink className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-
-              {inactiveBrands.length > 0 && (
-                <div>
-                  <p className="section-label mb-2">متاجر غير مفعلة</p>
-                  {inactiveBrands.map((brand) => (
-                    <div key={brand.id} className="card-flat p-4 flex items-center justify-between opacity-60">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 bg-slate-100 rounded-xl flex items-center justify-center">
-                          <Store className="w-4 h-4 text-slate-400" />
-                        </div>
-                        <div>
-                          <p className="text-sm font-bold text-slate-600">{brand.name}</p>
-                          <span className="badge badge-red">
-                            <WifiOff className="w-2.5 h-2.5" />
-                            غير متصل
-                          </span>
-                        </div>
-                      </div>
-                      <button onClick={openModal} className="btn-secondary text-xs">
-                        إعادة الربط
-                      </button>
+                {scopes.length > 0 && (
+                  <div className="bg-shopify-50 border border-shopify-100 rounded-xl px-3 py-2.5 mb-4">
+                    <p className="text-[10px] font-bold text-shopify-600 uppercase tracking-wider mb-1 flex items-center gap-1">
+                      <Key className="w-3 h-3" />
+                      الصلاحيات
+                    </p>
+                    <div className="flex flex-wrap gap-1">
+                      {scopes.slice(0, 8).map((scope) => (
+                        <span key={scope} className="badge badge-shopify text-[9px]">
+                          {scope}
+                        </span>
+                      ))}
                     </div>
-                  ))}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={handleSync}
+                    disabled={!status?.connected || syncing}
+                    className="btn-success flex-1 justify-center disabled:opacity-50 min-w-40"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${syncing ? "animate-spin" : ""}`} />
+                    {syncing ? "جاري المزامنة..." : "مزامنة كاملة"}
+                  </button>
+                  <button
+                    onClick={handleDisconnect}
+                    disabled={!status?.connected || disconnecting}
+                    className="btn-danger disabled:opacity-50"
+                  >
+                    <Unlink className="w-4 h-4" />
+                    {disconnecting ? "جارٍ الفصل..." : "فصل المتجر"}
+                  </button>
                 </div>
-              )}
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </div>
 
-        <div className="lg:col-span-2 space-y-5">
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Shield className="w-4 h-4 text-brand-500" />
-              <h2 className="text-base font-black text-slate-800">حالة النظام</h2>
-            </div>
-            <div className="card divide-y divide-slate-50 overflow-hidden">
-              {[
-                {
-                  icon: Database,
-                  bg: 'bg-brand-50',
-                  color: 'text-brand-600',
-                  title: 'Supabase',
-                  sub: 'Database health',
-                  status: serviceHealth.supabase,
-                },
-                {
-                  icon: Server,
-                  bg: 'bg-cyan-50',
-                  color: 'text-cyan-600',
-                  title: 'Backend API',
-                  sub: 'HTTP connection',
-                  status: serviceHealth.backend,
-                },
-                {
-                  icon: Activity,
-                  bg: 'bg-violet-50',
-                  color: 'text-violet-600',
-                  title: 'Webhooks',
-                  sub: `${serviceHealth.webhookEvents} event(s)`,
-                  status: serviceHealth.webhooks,
-                },
-              ].map((item, i) => (
-                <div key={i} className="flex items-center justify-between p-4 hover:bg-slate-50 transition-colors">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-9 h-9 ${item.bg} rounded-xl flex items-center justify-center`}>
-                      <item.icon className={`w-4 h-4 ${item.color}`} />
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-800 leading-none">{item.title}</p>
-                      <p className="text-[11px] text-slate-400 font-medium mt-0.5">{item.sub}</p>
-                    </div>
-                  </div>
-                  <span className={`badge ${healthBadgeClass(item.status)}`}>{healthLabel(item.status)}</span>
-                </div>
-              ))}
+        <div className="space-y-4">
+          <div className="card p-4">
+            <h3 className="text-sm font-black text-slate-800 mb-2">Redirect URI</h3>
+            <p className="text-xs text-slate-500 mb-3">
+              أضف الرابط التالي في Shopify App داخل Allowed redirection URLs.
+            </p>
+            <div className="bg-slate-900 rounded-xl px-3 py-2.5 flex items-center gap-2">
+              <code className="text-[11px] text-emerald-300 font-mono break-all flex-1">{shopifyRedirectUri}</code>
+              <button onClick={copyRedirectUri} className="btn-icon text-slate-200 hover:bg-slate-700">
+                <Copy className="w-4 h-4" />
+              </button>
             </div>
           </div>
 
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Link2 className="w-4 h-4 text-shopify-500" />
-              <h2 className="text-base font-black text-slate-800">رابط Redirect URI</h2>
+          <div className="card p-4 space-y-2 text-xs text-slate-500 font-medium">
+            <p className="font-black text-slate-800">سياسة النظام</p>
+            <div className="flex items-start gap-2">
+              <CheckCircle className="w-3.5 h-3.5 text-emerald-500 mt-0.5" />
+              <span>حساب واحد = متجر واحد فقط.</span>
             </div>
-            <div className="card p-4 space-y-3">
-              <p className="text-xs text-slate-500">
-                أضف الرابط التالي في Shopify App داخل <span className="font-bold">Allowed redirection URLs</span>.
-              </p>
-              <div className="bg-slate-900 rounded-xl px-3 py-2.5 flex items-center gap-2">
-                <code className="text-[11px] text-emerald-300 font-mono break-all flex-1">
-                  {shopifyRedirectUri}
-                </code>
-                <button onClick={copyRedirectUri} className="btn-icon text-slate-200 hover:bg-slate-700">
-                  <Copy className="w-4 h-4" />
-                </button>
-              </div>
+            <div className="flex items-start gap-2">
+              <CheckCircle className="w-3.5 h-3.5 text-emerald-500 mt-0.5" />
+              <span>جميع البيانات معزولة حسب `store_id`.</span>
             </div>
-          </div>
-
-          <div className="card p-5">
-            <div className="flex items-center gap-2 mb-3">
-              <Lock className="w-4 h-4 text-amber-500" />
-              <h3 className="text-sm font-black text-slate-800">الأمان</h3>
-            </div>
-            <div className="space-y-2 text-xs text-slate-500 font-medium">
-              {[
-                'الربط يتم عبر Shopify OAuth الرسمي.',
-                'يتم التحقق من HMAC في Webhooks.',
-                'يمكن فصل المتجر وإعادة الربط في أي وقت.',
-              ].map((txt, i) => (
-                <div key={i} className="flex items-start gap-2">
-                  <CheckCircle className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0 mt-0.5" />
-                  <span>{txt}</span>
-                </div>
-              ))}
+            <div className="flex items-start gap-2">
+              <CheckCircle className="w-3.5 h-3.5 text-emerald-500 mt-0.5" />
+              <span>الربط يتم عبر Shopify OAuth الرسمي.</span>
             </div>
           </div>
         </div>
@@ -602,12 +354,9 @@ export default function Settings() {
                   <button
                     key={s}
                     onClick={() => setOauthStep(s as 1 | 2)}
-                    className={`flex-1 py-2 rounded-xl text-xs font-black transition-all ${oauthStep === s
-                      ? 'bg-brand-500 text-white shadow-brand'
-                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                      }`}
+                    className={`flex-1 py-2 rounded-xl text-xs font-black transition-all ${oauthStep === s ? "bg-brand-500 text-white shadow-brand" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}
                   >
-                    {s === 1 ? '1) المتجر' : '2) بيانات التطبيق'}
+                    {s === 1 ? "1) المتجر" : "2) بيانات التطبيق"}
                   </button>
                 ))}
               </div>
@@ -621,10 +370,6 @@ export default function Settings() {
 
               {oauthStep === 1 && (
                 <div className="space-y-4">
-                  <div className="alert-info">
-                    <Info className="w-4 h-4 flex-shrink-0" />
-                    <p className="text-xs font-semibold">أدخل Shop Domain للمتجر</p>
-                  </div>
                   <div className="space-y-1.5">
                     <label className="section-label">Shop Domain</label>
                     <div className="relative">
@@ -635,14 +380,14 @@ export default function Settings() {
                         onChange={(e) => setOauthForm({ ...oauthForm, shop: e.target.value })}
                         className="input pr-9"
                         placeholder="my-store أو my-store.myshopify.com"
-                        onKeyDown={(e) => e.key === 'Enter' && setOauthStep(2)}
+                        onKeyDown={(e) => e.key === "Enter" && setOauthStep(2)}
                       />
                     </div>
                   </div>
                   <button
                     onClick={() => {
-                      if (!oauthForm.shop.trim()) return setOauthError('أدخل عنوان المتجر.');
-                      setOauthError('');
+                      if (!oauthForm.shop.trim()) return setOauthError("أدخل عنوان المتجر.");
+                      setOauthError("");
                       setOauthStep(2);
                     }}
                     className="btn-primary w-full justify-center py-2.5"
@@ -655,35 +400,6 @@ export default function Settings() {
 
               {oauthStep === 2 && (
                 <div className="space-y-4">
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-1.5">
-                    <p className="text-xs font-black text-amber-800 flex items-center gap-1.5">
-                      <Key className="w-3.5 h-3.5" />
-                      Shopify App Credentials
-                    </p>
-                    <a
-                      href="https://partners.shopify.com/organizations"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-xs font-bold text-amber-700 underline flex items-center gap-1"
-                    >
-                      partners.shopify.com
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                    <p className="text-[11px] text-amber-600">Apps → اختر التطبيق → Client credentials</p>
-                  </div>
-
-                  <div className="bg-slate-900 rounded-xl p-3">
-                    <p className="text-[10px] text-slate-300 mb-1">Redirect URI (ضعه في Shopify)</p>
-                    <div className="flex items-center gap-2">
-                      <code className="text-[11px] text-emerald-300 font-mono break-all flex-1">
-                        {shopifyRedirectUri}
-                      </code>
-                      <button onClick={copyRedirectUri} className="btn-icon text-slate-200 hover:bg-slate-700">
-                        <Copy className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-
                   <div className="space-y-1.5">
                     <label className="section-label">API Key (Client ID)</label>
                     <input
@@ -700,7 +416,7 @@ export default function Settings() {
                     <label className="section-label">API Secret Key</label>
                     <div className="relative">
                       <input
-                        type={showSecret ? 'text' : 'password'}
+                        type={showSecret ? "text" : "password"}
                         value={oauthForm.api_secret}
                         onChange={(e) => setOauthForm({ ...oauthForm, api_secret: e.target.value })}
                         className="input font-mono text-sm pr-10"
@@ -737,8 +453,6 @@ export default function Settings() {
                   </div>
                 </div>
               )}
-
-              <p className="text-center text-[11px] text-slate-400">بالمتابعة أنت توافق على شروط Shopify API</p>
             </div>
           </div>
         </div>

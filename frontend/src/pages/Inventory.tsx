@@ -46,8 +46,8 @@ export default function Inventory() {
   const fetchInventory = async () => {
     setLoading(true);
     try {
-      const { data } = await api.get('/api/inventory', { params: { search, limit: 150 } });
-      setVariants(data.data || []);
+      const { data } = await api.get('/api/app/products', { params: { search, limit: 150 } });
+      setVariants(data.products || data.data || []);
     } finally { setLoading(false); }
   };
 

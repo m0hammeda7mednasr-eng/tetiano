@@ -7,13 +7,9 @@ import { logger } from "./utils/logger";
 import { startScheduledJobs } from "./jobs";
 import { rateLimiter } from "./middleware/rateLimiter";
 import webhookRoutes from "./routes/webhooks";
-import inventoryRoutes from "./routes/inventory";
-import reportsRoutes from "./routes/reports";
-import notificationsRoutes from "./routes/notifications";
-import teamsRoutes from "./routes/teams";
 import shopifyOAuthRoutes from "./routes/shopifyOAuth";
-import ordersRoutes from "./routes/orders";
-import adminRoutes from "./routes/admin";
+import appRoutes from "./routes/app";
+import onboardingRoutes from "./routes/onboarding";
 import { errorHandler } from "./middleware/errorHandler";
 
 const app = express();
@@ -129,13 +125,9 @@ app.get("/health", (req, res) => {
 
 // ── API Routes ────────────────────────────────────────────────
 app.use("/api/webhooks", webhookRoutes);
-app.use("/api/inventory", inventoryRoutes);
-app.use("/api/reports", reportsRoutes);
-app.use("/api/notifications", notificationsRoutes);
-app.use("/api/teams", teamsRoutes);
 app.use("/api/shopify", shopifyOAuthRoutes);
-app.use("/api/orders", ordersRoutes);
-app.use("/api/admin", adminRoutes);
+app.use("/api/app", appRoutes);
+app.use("/api/onboarding", onboardingRoutes);
 
 // ── 404 Handler ───────────────────────────────────────────────
 app.use("*", (req, res) => {

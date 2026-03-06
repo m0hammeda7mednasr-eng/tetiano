@@ -1,155 +1,152 @@
-import { supabase } from '../config/supabase';
-import { logger } from '../utils/logger';
+import { supabase } from "../config/supabase";
+import { logger } from "../utils/logger";
+import crypto from "crypto";
+
+type CreatedUser = {
+  id: string;
+  email: string;
+};
+
+function slugify(input: string): string {
+  const normalized = input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "store";
+}
+
+function isSchemaCompatibilityError(error: any): boolean {
+  const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    text.includes("column") ||
+    text.includes("relation") ||
+    text.includes("does not exist") ||
+    text.includes("schema cache")
+  );
+}
+
+async function ensureAuthUser(email: string, password: string, fullName: string): Promise<CreatedUser> {
+  const lookup = await supabase.auth.admin.listUsers();
+  const existing = lookup.data?.users?.find((u) => (u.email || "").toLowerCase() === email.toLowerCase());
+  if (existing?.id) {
+    return { id: existing.id, email: existing.email || email };
+  }
+
+  const created = await supabase.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { full_name: fullName },
+  });
+
+  if (created.error || !created.data.user?.id) {
+    throw created.error || new Error(`Failed to create user: ${email}`);
+  }
+
+  return { id: created.data.user.id, email: created.data.user.email || email };
+}
+
+async function createOrUpdateStore(storeId: string, storeName: string, adminUserId: string, slug: string) {
+  let insert = await supabase
+    .from("stores")
+    .upsert(
+      {
+        id: storeId,
+        name: storeName,
+        slug,
+        admin_user_id: adminUserId,
+        status: "active",
+      },
+      { onConflict: "id" },
+    )
+    .select("id, name")
+    .single();
+
+  if (insert.error && isSchemaCompatibilityError(insert.error)) {
+    insert = await supabase
+      .from("stores")
+      .upsert(
+        {
+          id: storeId,
+          name: storeName,
+          slug,
+          owner_user_id: adminUserId,
+          status: "active",
+        },
+        { onConflict: "id" },
+      )
+      .select("id, name")
+      .single();
+  }
+
+  if (insert.error) {
+    throw insert.error;
+  }
+
+  return insert.data;
+}
 
 async function seed() {
   try {
-    logger.info('Starting database seed...');
+    logger.info("Starting Store-per-Tenant seed (no super admin)...");
 
-    // Create brands
-    const { data: brands, error: brandsError } = await supabase
-      .from('brands')
-      .upsert([
-        {
-          name: 'Tetiano',
-          shopify_domain: process.env.SHOPIFY_TETIANO_DOMAIN || 'tetiano.myshopify.com',
-          shopify_location_id: process.env.SHOPIFY_TETIANO_LOCATION_ID || '12345678',
-        },
-        {
-          name: '98',
-          shopify_domain: process.env.SHOPIFY_98_DOMAIN || '98brand.myshopify.com',
-          shopify_location_id: process.env.SHOPIFY_98_LOCATION_ID || '87654321',
-        },
-      ])
-      .select();
+    const adminEmail = (process.env.SEED_ADMIN_EMAIL || "admin@tetiano.local").trim().toLowerCase();
+    const adminPassword = (process.env.SEED_ADMIN_PASSWORD || "Admin12345!").trim();
+    const adminName = (process.env.SEED_ADMIN_NAME || "Store Admin").trim();
+    const storeName = (process.env.SEED_STORE_NAME || "Demo Store").trim();
 
-    if (brandsError) {
-      throw brandsError;
-    }
+    const adminUser = await ensureAuthUser(adminEmail, adminPassword, adminName);
+    const storeId = process.env.SEED_STORE_ID?.trim() || crypto.randomUUID();
+    const slug = `${slugify(storeName)}-${adminUser.id.replace(/-/g, "").slice(0, 6)}`;
 
-    logger.info('Brands created', { count: brands.length });
+    await createOrUpdateStore(storeId, storeName, adminUser.id, slug);
 
-    // Create a default team
-    const { data: team, error: teamError } = await supabase
-      .from('teams')
-      .upsert([{ name: 'Default Team' }])
-      .select()
-      .single();
-
-    if (teamError) {
-      throw teamError;
-    }
-
-    logger.info('Team created', { teamId: team.id });
-
-    // Link team to brands
-    const { error: teamBrandsError } = await supabase
-      .from('team_brands')
+    const profile = await supabase
+      .from("user_profiles")
       .upsert(
-        brands.map((brand) => ({
-          team_id: team.id,
-          brand_id: brand.id,
-        }))
+        {
+          id: adminUser.id,
+          full_name: adminName,
+          role: "admin",
+          store_id: storeId,
+          is_active: true,
+          avatar_color: "#2563eb",
+        },
+        { onConflict: "id" },
       );
-
-    if (teamBrandsError) {
-      throw teamBrandsError;
+    if (profile.error) {
+      throw profile.error;
     }
 
-    logger.info('Team brands linked');
-
-    // Create sample products (optional - will be synced from Shopify)
-    const { data: products, error: productsError } = await supabase
-      .from('products')
-      .upsert([
-        {
-          brand_id: brands[0].id,
-          shopify_product_id: '1234567890',
-          title: 'Sample Product 1',
-          handle: 'sample-product-1',
-          product_type: 'Apparel',
-          vendor: 'Tetiano',
-          status: 'active',
-        },
-        {
-          brand_id: brands[1].id,
-          shopify_product_id: '0987654321',
-          title: 'Sample Product 2',
-          handle: 'sample-product-2',
-          product_type: 'Accessories',
-          vendor: '98',
-          status: 'active',
-        },
-      ])
-      .select();
-
-    if (productsError) {
-      throw productsError;
-    }
-
-    logger.info('Sample products created', { count: products.length });
-
-    // Create sample variants
-    const { data: variants, error: variantsError } = await supabase
-      .from('variants')
-      .upsert([
-        {
-          product_id: products[0].id,
-          brand_id: brands[0].id,
-          shopify_variant_id: '11111111',
-          title: 'Small / Red',
-          sku: 'SAMPLE-1-SM-RED',
-          price: 29.99,
-        },
-        {
-          product_id: products[0].id,
-          brand_id: brands[0].id,
-          shopify_variant_id: '22222222',
-          title: 'Medium / Blue',
-          sku: 'SAMPLE-1-MD-BLUE',
-          price: 29.99,
-        },
-        {
-          product_id: products[1].id,
-          brand_id: brands[1].id,
-          shopify_variant_id: '33333333',
-          title: 'One Size',
-          sku: 'SAMPLE-2-OS',
-          price: 19.99,
-        },
-      ])
-      .select();
-
-    if (variantsError) {
-      throw variantsError;
-    }
-
-    logger.info('Sample variants created', { count: variants.length });
-
-    // Create initial inventory levels
-    const { error: inventoryError } = await supabase
-      .from('inventory_levels')
+    const membership = await supabase
+      .from("store_memberships")
       .upsert(
-        variants.map((variant) => ({
-          variant_id: variant.id,
-          brand_id: variant.brand_id,
-          available: 100,
-        }))
+        {
+          store_id: storeId,
+          user_id: adminUser.id,
+          store_role: "admin",
+          status: "active",
+        },
+        { onConflict: "user_id" },
       );
-
-    if (inventoryError) {
-      throw inventoryError;
+    if (membership.error) {
+      throw membership.error;
     }
 
-    logger.info('Initial inventory levels set');
+    await supabase.from("brands").upsert(
+      {
+        id: storeId,
+        name: `${storeName}-${storeId.replace(/-/g, "").slice(0, 6)}`,
+        shopify_domain: `pending-${storeId.replace(/-/g, "").slice(0, 6)}.myshopify.com`,
+        shopify_location_id: "pending",
+      },
+      { onConflict: "id" },
+    );
 
-    logger.info('Seed completed successfully!');
-    logger.info('Next steps:');
-    logger.info('1. Sign up a user at /signup');
-    logger.info('2. Manually assign user to team with admin role');
-    logger.info('3. Configure Shopify webhooks');
-    logger.info('4. Sync products from Shopify');
+    logger.info("Seed completed successfully");
+    logger.info("Store Admin", { email: adminUser.email, storeId });
   } catch (error: any) {
-    logger.error('Seed failed', { error: error.message });
+    logger.error("Seed failed", { error: error?.message, code: error?.code });
     process.exit(1);
   }
 }
