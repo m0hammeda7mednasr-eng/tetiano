@@ -22,6 +22,11 @@ const webhookHandler = new WebhookHandler();
 // Global fallback webhook secret (from env)
 const GLOBAL_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET || '';
 
+function isMultipleRowsError(error: any): boolean {
+  const text = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase();
+  return text.includes('multiple') && text.includes('rows');
+}
+
 /** Verify Shopify HMAC-SHA256 signature */
 function verifyHmac(rawBody: Buffer | string, hmacHeader: string, secret: string): boolean {
   if (!hmacHeader || !secret) return false;
@@ -62,13 +67,23 @@ router.post('/shopify', async (req: Request, res: Response) => {
 
   if (shopDomain) {
     try {
-      const { data } = await supabase
+      const result = await supabase
         .from('brands')
         .select('id, webhook_secret, api_secret')
         .eq('shopify_domain', shopDomain)
-        .single();
+        .maybeSingle();
 
-      // Prefer brand-specific secret, fallback to api_secret, then global
+      let data = result.data;
+      if (result.error && isMultipleRowsError(result.error)) {
+        const fallback = await supabase
+          .from('brands')
+          .select('id, webhook_secret, api_secret')
+          .eq('shopify_domain', shopDomain)
+          .limit(1)
+          .maybeSingle();
+        data = fallback.data;
+      }
+
       if (data?.webhook_secret) webhookSecret = data.webhook_secret;
       else if (data?.api_secret) webhookSecret = data.api_secret;
     } catch { /* use global secret */ }

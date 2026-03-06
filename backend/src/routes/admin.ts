@@ -22,6 +22,25 @@ function resolveBackendBaseUrl(): string {
 
 const BACKEND_BASE_URL = resolveBackendBaseUrl();
 
+function resolveBackendUrlFromRequest(req?: AuthRequest): string {
+  if (!req) return BACKEND_BASE_URL;
+
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "")
+    .split(",")[0]
+    .trim();
+  const forwardedHost = String(req.headers["x-forwarded-host"] || "")
+    .split(",")[0]
+    .trim();
+  const host = forwardedHost || req.get("host") || "";
+
+  if (!host) {
+    return BACKEND_BASE_URL;
+  }
+
+  const protocol = forwardedProto || (host.includes("localhost") ? "http" : "https");
+  return `${protocol}://${host}`;
+}
+
 function isSchemaCompatibilityError(error: any): boolean {
   const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
   return (
@@ -31,6 +50,17 @@ function isSchemaCompatibilityError(error: any): boolean {
     text.includes("schema cache") ||
     text.includes("unknown relationship")
   );
+}
+
+function setIfPresent(
+  target: Record<string, unknown>,
+  row: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): void {
+  if (Object.prototype.hasOwnProperty.call(row, key)) {
+    target[key] = value;
+  }
 }
 
 async function getUserSnapshot(userId: string) {
@@ -712,11 +742,32 @@ router.get(
       }
 
       // Fetch all users to find who has NOT submitted
-      const { data: allUsers, error: allUsersError } = await supabase
-        .from("user_profiles")
-        .select("id, full_name, role, avatar_color")
-        .eq("is_active", true)
-        .neq("role", "admin");
+      const usersQueryVariants = [
+        supabase
+          .from("user_profiles")
+          .select("id, full_name, role, avatar_color")
+          .eq("is_active", true)
+          .neq("role", "admin"),
+        supabase
+          .from("user_profiles")
+          .select("id, full_name, role, avatar_color")
+          .neq("role", "admin"),
+      ];
+
+      let allUsers: any[] = [];
+      let allUsersError: any = null;
+      for (const query of usersQueryVariants) {
+        const { data, error } = await query;
+        if (!error) {
+          allUsers = data || [];
+          allUsersError = null;
+          break;
+        }
+        allUsersError = error;
+        if (!isSchemaCompatibilityError(error)) {
+          break;
+        }
+      }
       if (allUsersError) {
         throw allUsersError;
       }
@@ -1034,18 +1085,33 @@ router.post(
     }
 
     try {
+      const { data: brand, error: brandError } = await supabase
+        .from("brands")
+        .select("*")
+        .eq("id", brandId)
+        .maybeSingle();
+      if (brandError) throw brandError;
+      if (!brand) {
+        return res.status(404).json({ error: "Brand not found" });
+      }
+
+      const updates: Record<string, unknown> = {
+        shopify_domain: domain,
+        updated_at: new Date().toISOString(),
+      };
+      setIfPresent(updates, brand, "shopify_api_key", apiKey);
+      setIfPresent(updates, brand, "api_key", apiKey);
+      setIfPresent(updates, brand, "shopify_access_token", accessToken);
+      setIfPresent(updates, brand, "access_token", accessToken);
+      setIfPresent(updates, brand, "shopify_location_id", locationId || null);
+      setIfPresent(updates, brand, "is_configured", true);
+      setIfPresent(updates, brand, "is_active", true);
+      setIfPresent(updates, brand, "connected_at", new Date().toISOString());
+
       const beforeSnapshot = await getBrandSnapshot(brandId);
       const { error } = await supabase
         .from("brands")
-        .update({
-          shopify_api_key: apiKey,
-          shopify_access_token: accessToken,
-          shopify_domain: domain,
-          shopify_location_id: locationId,
-          is_configured: true,
-          connected_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
+        .update(updates)
         .eq("id", brandId);
 
       if (error) throw error;
@@ -1076,16 +1142,31 @@ router.delete(
     const { id } = req.params;
 
     try {
+      const { data: brand, error: brandError } = await supabase
+        .from("brands")
+        .select("*")
+        .eq("id", id)
+        .maybeSingle();
+      if (brandError) throw brandError;
+      if (!brand) {
+        return res.status(404).json({ error: "Brand not found" });
+      }
+
+      const updates: Record<string, unknown> = {
+        updated_at: new Date().toISOString(),
+      };
+      setIfPresent(updates, brand, "shopify_api_key", null);
+      setIfPresent(updates, brand, "api_key", null);
+      setIfPresent(updates, brand, "shopify_access_token", null);
+      setIfPresent(updates, brand, "access_token", null);
+      setIfPresent(updates, brand, "is_configured", false);
+      setIfPresent(updates, brand, "is_active", false);
+      setIfPresent(updates, brand, "connected_at", null);
+
       const beforeSnapshot = await getBrandSnapshot(id);
       const { error } = await supabase
         .from("brands")
-        .update({
-          shopify_api_key: null,
-          shopify_access_token: null,
-          is_configured: false,
-          connected_at: null,
-          updated_at: new Date().toISOString(),
-        })
+        .update(updates)
         .eq("id", id);
 
       if (error) throw error;
@@ -1217,7 +1298,7 @@ router.get(
   requireRole("admin"),
   async (req: AuthRequest, res: Response) => {
     try {
-      const backendUrl = BACKEND_BASE_URL;
+      const backendUrl = resolveBackendUrlFromRequest(req);
       
       // Get config from environment or database
       const config = {
@@ -1302,7 +1383,7 @@ router.post(
     }
 
     try {
-      const backendUrl = BACKEND_BASE_URL;
+      const backendUrl = resolveBackendUrlFromRequest(req);
       
       // In production, save to secure storage or environment
       // For now, we'll return the config with redirect URI
@@ -1352,7 +1433,7 @@ router.get(
     try {
       const shopifyDomain = process.env.SHOPIFY_DOMAIN;
       const clientId = process.env.SHOPIFY_CLIENT_ID;
-      const redirectUri = `${BACKEND_BASE_URL}/api/shopify/callback`;
+      const redirectUri = `${resolveBackendUrlFromRequest(req)}/api/shopify/callback`;
 
       if (!shopifyDomain || !clientId) {
         return res.status(400).json({ error: "الإعدادات غير مكتملة" });

@@ -143,6 +143,9 @@ export class ShopifyService {
           productType
           vendor
           status
+          tags
+          createdAt
+          updatedAt
           variants(first: 100) {
             edges {
               node {
@@ -152,6 +155,12 @@ export class ShopifyService {
                 barcode
                 price
                 compareAtPrice
+                position
+                selectedOptions {
+                  name
+                  value
+                }
+                inventoryQuantity
                 inventoryItem {
                   id
                 }
@@ -206,6 +215,9 @@ export class ShopifyService {
               productType
               vendor
               status
+              tags
+              createdAt
+              updatedAt
               variants(first: 100) {
                 edges {
                   node {
@@ -215,6 +227,12 @@ export class ShopifyService {
                     barcode
                     price
                     compareAtPrice
+                    position
+                    selectedOptions {
+                      name
+                      value
+                    }
+                    inventoryQuantity
                     inventoryItem {
                       id
                     }
@@ -241,6 +259,178 @@ export class ShopifyService {
     return products;
   }
 
+  // Sync all customers with pagination
+  async syncAllCustomers() {
+    const query = `
+      query getCustomers($cursor: String) {
+        customers(first: 50, after: $cursor, sortKey: UPDATED_AT, reverse: true) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          edges {
+            node {
+              id
+              firstName
+              lastName
+              email
+              phone
+              state
+              tags
+              acceptsMarketing
+              numberOfOrders
+              totalSpentV2 {
+                amount
+                currencyCode
+              }
+              defaultAddress {
+                address1
+                address2
+                city
+                province
+                country
+                zip
+              }
+              createdAt
+              updatedAt
+            }
+          }
+        }
+      }
+    `;
+
+    const customers = [];
+    let hasNextPage = true;
+    let cursor = null;
+
+    while (hasNextPage) {
+      const result: any = await this.graphql(query, { cursor });
+      customers.push(...result.customers.edges.map((e: any) => e.node));
+      hasNextPage = result.customers.pageInfo.hasNextPage;
+      cursor = result.customers.pageInfo.endCursor;
+    }
+
+    return customers;
+  }
+
+  // Sync all orders with details and pagination
+  async syncAllOrders() {
+    const query = `
+      query getOrders($cursor: String) {
+        orders(first: 50, after: $cursor, sortKey: UPDATED_AT, reverse: true) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          edges {
+            node {
+              id
+              name
+              orderNumber
+              email
+              createdAt
+              updatedAt
+              processedAt
+              cancelledAt
+              closedAt
+              displayFinancialStatus
+              displayFulfillmentStatus
+              tags
+              note
+              customer {
+                id
+                firstName
+                lastName
+                email
+                phone
+              }
+              subtotalPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              totalTaxSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              totalDiscountsSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              totalPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              currentTotalPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              billingAddress {
+                address1
+                address2
+                city
+                province
+                country
+                zip
+              }
+              shippingAddress {
+                address1
+                address2
+                city
+                province
+                country
+                zip
+              }
+              lineItems(first: 100) {
+                edges {
+                  node {
+                    id
+                    title
+                    sku
+                    quantity
+                    variant {
+                      id
+                    }
+                    product {
+                      id
+                      title
+                      handle
+                      vendor
+                      productType
+                      status
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const orders = [];
+    let hasNextPage = true;
+    let cursor = null;
+
+    while (hasNextPage) {
+      const result: any = await this.graphql(query, { cursor });
+      orders.push(...result.orders.edges.map((e: any) => e.node));
+      hasNextPage = result.orders.pageInfo.hasNextPage;
+      cursor = result.orders.pageInfo.endCursor;
+    }
+
+    return orders;
+  }
+
   // Get recent orders
   async getRecentOrders(limit: number = 20) {
     const query = `
@@ -260,15 +450,25 @@ export class ShopifyService {
               displayFinancialStatus
               displayFulfillmentStatus
               customer {
+                id
                 firstName
                 lastName
+                email
+                phone
               }
               lineItems(first: 10) {
                 edges {
                   node {
+                    id
                     title
                     quantity
                     sku
+                    variant {
+                      id
+                    }
+                    product {
+                      id
+                    }
                   }
                 }
               }

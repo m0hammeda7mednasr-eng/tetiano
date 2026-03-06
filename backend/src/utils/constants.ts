@@ -36,10 +36,16 @@ export enum OrderStatus {
 export enum ShopifyWebhookTopic {
   INVENTORY_LEVELS_UPDATE = "inventory_levels/update",
   ORDERS_CREATE = "orders/create",
+  ORDERS_UPDATED = "orders/updated",
   ORDERS_PAID = "orders/paid",
   ORDERS_CANCELLED = "orders/cancelled",
   REFUNDS_CREATE = "refunds/create",
+  PRODUCTS_CREATE = "products/create",
   PRODUCTS_UPDATE = "products/update",
+  PRODUCTS_DELETE = "products/delete",
+  CUSTOMERS_CREATE = "customers/create",
+  CUSTOMERS_UPDATE = "customers/update",
+  CUSTOMERS_DELETE = "customers/delete",
 }
 
 export const SHOPIFY_SCOPES = [
@@ -48,6 +54,7 @@ export const SHOPIFY_SCOPES = [
   "read_inventory",
   "write_inventory",
   "read_orders",
+  "read_customers",
   "read_locations",
 ].join(",");
 

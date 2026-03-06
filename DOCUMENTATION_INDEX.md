@@ -95,7 +95,8 @@ supabase/migrations/
 ├── 007_brands_api_creds.sql     - بيانات العلامات
 ├── 008_simplified_rbac.sql      - نظام الصلاحيات
 ├── 010_force_admin_on_signup.sql - أول مستخدم أدمن
-└── 014_fix_team_permissions.sql - إصلاح team_permissions
+├── 014_fix_team_permissions.sql - إصلاح team_permissions
+└── 015_shopify_schema_compat.sql - توافق Shopify columns
 ```
 
 ---

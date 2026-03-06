@@ -5,8 +5,17 @@ import { supabase } from "../config/supabase";
 import { authenticate, AuthRequest } from "../middleware/auth";
 import { logger } from "../utils/logger";
 import { logAuditEvent } from "../utils/auditLogger";
+import {
+  assertUserBrandAccess,
+  BrandAccessError,
+  clearUserPrimaryBrandIfMatches,
+  getUserPrimaryBrandId,
+  ensureUserSingleBrand,
+} from "../utils/brandAccess";
+import { ShopifySyncService } from "../services/shopifySync";
 
 const router = Router();
+const shopifySyncService = new ShopifySyncService();
 
 const SHOPIFY_API_VERSION = "2024-01";
 const OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
@@ -32,8 +41,35 @@ function resolveFrontendUrl(): string {
 
 const BACKEND_BASE_URL = resolveBackendBaseUrl();
 const FRONTEND_URL = resolveFrontendUrl();
-const REDIRECT_URI =
-  (process.env.SHOPIFY_REDIRECT_URI || "").trim() || `${BACKEND_BASE_URL}/api/shopify/callback`;
+
+function resolveBackendUrlFromRequest(req?: Request): string {
+  if (!req) return BACKEND_BASE_URL;
+
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "")
+    .split(",")[0]
+    .trim();
+  const forwardedHost = String(req.headers["x-forwarded-host"] || "")
+    .split(",")[0]
+    .trim();
+  const host = forwardedHost || req.get("host") || "";
+
+  if (!host) {
+    return BACKEND_BASE_URL;
+  }
+
+  const protocol = forwardedProto || (host.includes("localhost") ? "http" : "https");
+  return `${protocol}://${host}`;
+}
+
+function resolveRedirectUri(req?: Request): string {
+  const explicit = (process.env.SHOPIFY_REDIRECT_URI || "").trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  const backendBase = resolveBackendUrlFromRequest(req);
+  return `${trimTrailingSlash(backendBase)}/api/shopify/callback`;
+}
 
 const SCOPES = [
   "read_products",
@@ -41,14 +77,20 @@ const SCOPES = [
   "read_inventory",
   "write_inventory",
   "read_orders",
+  "read_customers",
   "read_locations",
 ].join(",");
 
 const WEBHOOK_TOPICS = [
   "orders/create",
   "orders/updated",
+  "orders/cancelled",
   "products/create",
   "products/update",
+  "products/delete",
+  "customers/create",
+  "customers/update",
+  "customers/delete",
   "inventory_levels/update",
 ];
 
@@ -111,12 +153,17 @@ function buildBrandNameFromShop(shopDomain: string): string {
   return (base || "shopify_store").slice(0, 80);
 }
 
-function buildOAuthUrl(shopDomain: string, clientId: string, state: string): string {
+function buildOAuthUrl(
+  shopDomain: string,
+  clientId: string,
+  state: string,
+  redirectUri: string,
+): string {
   return (
     `https://${shopDomain}/admin/oauth/authorize?` +
     `client_id=${encodeURIComponent(clientId)}&` +
     `scope=${encodeURIComponent(SCOPES)}&` +
-    `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
+    `redirect_uri=${encodeURIComponent(redirectUri)}&` +
     `state=${encodeURIComponent(state)}`
   );
 }
@@ -182,6 +229,11 @@ function isSupabaseAccessError(error: any): boolean {
     text.includes("invalid api key") ||
     text.includes("service_role")
   );
+}
+
+function isMultipleRowsError(error: any): boolean {
+  const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return text.includes("multiple") && text.includes("rows");
 }
 
 function isStateExpired(stateRow: OAuthStateRecord): boolean {
@@ -282,6 +334,40 @@ async function findBrandById(brandId: string) {
   return data;
 }
 
+async function findBrandByShopDomain(shopDomain: string): Promise<Record<string, unknown> | null> {
+  if (!shopDomain) return null;
+
+  const { data, error } = await supabase
+    .from("brands")
+    .select("*")
+    .eq("shopify_domain", shopDomain)
+    .maybeSingle();
+
+  if (!error) {
+    return (data as Record<string, unknown> | null) || null;
+  }
+
+  if (!isMultipleRowsError(error)) {
+    throw error;
+  }
+
+  const fallback = await supabase
+    .from("brands")
+    .select("*")
+    .eq("shopify_domain", shopDomain)
+    .limit(1)
+    .maybeSingle();
+
+  if (fallback.error) {
+    throw fallback.error;
+  }
+
+  logger.warn("Multiple brands found for same Shopify domain, falling back to latest record", {
+    shopDomain,
+  });
+  return (fallback.data as Record<string, unknown> | null) || null;
+}
+
 async function findBrandByOptionalColumn(column: string, value: string) {
   if (!value) {
     return null;
@@ -296,20 +382,33 @@ async function findBrandByOptionalColumn(column: string, value: string) {
       });
       return null;
     }
-    throw error;
+
+    if (!isMultipleRowsError(error)) {
+      throw error;
+    }
+
+    const fallback = await supabase
+      .from("brands")
+      .select("*")
+      .eq(column, value)
+      .limit(1)
+      .maybeSingle();
+
+    if (fallback.error) {
+      throw fallback.error;
+    }
+
+    logger.warn("Multiple brands found for optional lookup, falling back to latest record", {
+      column,
+      value,
+    });
+    return fallback.data;
   }
   return data;
 }
 
 async function resolveOrCreateBrandForInstall(shopDomain: string): Promise<Record<string, unknown>> {
-  const { data: byShop, error: byShopError } = await supabase
-    .from("brands")
-    .select("*")
-    .eq("shopify_domain", shopDomain)
-    .maybeSingle();
-  if (byShopError) {
-    throw byShopError;
-  }
+  const byShop = await findBrandByShopDomain(shopDomain);
   if (byShop) {
     return byShop as Record<string, unknown>;
   }
@@ -350,14 +449,7 @@ async function resolveOrCreateBrandForInstall(shopDomain: string): Promise<Recor
     .maybeSingle();
 
   if (createError) {
-    const { data: raceBrand, error: raceError } = await supabase
-      .from("brands")
-      .select("*")
-      .eq("shopify_domain", shopDomain)
-      .maybeSingle();
-    if (raceError) {
-      throw raceError;
-    }
+    const raceBrand = await findBrandByShopDomain(shopDomain);
     if (raceBrand) {
       return raceBrand as Record<string, unknown>;
     }
@@ -399,14 +491,7 @@ async function resolveBrandForOAuth(stateRow: OAuthStateRecord, shopDomain: stri
     }
   }
 
-  const { data: byShop, error: byShopError } = await supabase
-    .from("brands")
-    .select("*")
-    .eq("shopify_domain", shopDomain)
-    .maybeSingle();
-  if (byShopError) {
-    throw byShopError;
-  }
+  const byShop = await findBrandByShopDomain(shopDomain);
   if (byShop) {
     return byShop;
   }
@@ -489,6 +574,134 @@ function getPublicBrandConnection(brand: Record<string, unknown>) {
     scopes: scopes ? scopes.split(",").map((item) => item.trim()).filter(Boolean) : [],
     last_sync_at: getBrandField<string | null>(brand, ["last_sync_at"]) || null,
   };
+}
+
+type WebhookSetupResult = {
+  webhookAddress: string;
+  createdTopics: string[];
+  skippedTopics: string[];
+  failedTopics: { topic: string; error: string }[];
+};
+
+async function registerWebhooksForBrand(brand: Record<string, unknown>): Promise<WebhookSetupResult> {
+  const accessToken = (brand.shopify_access_token || brand.access_token || "").toString();
+  if (!accessToken) {
+    throw new HttpError(400, "not_connected", "Brand is not connected to Shopify");
+  }
+
+  const shopDomain = normalizeShopDomain(String(brand.shopify_domain || ""));
+  if (!shopDomain) {
+    throw new HttpError(400, "missing_shop_domain", "Brand is missing shopify_domain");
+  }
+
+  const webhookAddress = `${BACKEND_BASE_URL}/api/webhooks/shopify`;
+  const adminApiBase = `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}`;
+
+  const { data: existingResponse } = await axios.get(`${adminApiBase}/webhooks.json`, {
+    headers: {
+      "X-Shopify-Access-Token": accessToken,
+    },
+    timeout: SHOPIFY_HTTP_TIMEOUT_MS,
+  });
+
+  const existingWebhooks: any[] = existingResponse?.webhooks || [];
+  const existingTopicSet = new Set(
+    existingWebhooks
+      .filter((hook) => String(hook?.address || "").trim() === webhookAddress)
+      .map((hook) => String(hook?.topic || "").trim()),
+  );
+
+  const createdTopics: string[] = [];
+  const skippedTopics: string[] = [];
+  const failedTopics: { topic: string; error: string }[] = [];
+
+  for (const topic of WEBHOOK_TOPICS) {
+    if (existingTopicSet.has(topic)) {
+      skippedTopics.push(topic);
+      continue;
+    }
+
+    try {
+      await axios.post(
+        `${adminApiBase}/webhooks.json`,
+        {
+          webhook: {
+            topic,
+            address: webhookAddress,
+            format: "json",
+          },
+        },
+        {
+          headers: {
+            "X-Shopify-Access-Token": accessToken,
+          },
+          timeout: SHOPIFY_HTTP_TIMEOUT_MS,
+        },
+      );
+      createdTopics.push(topic);
+    } catch (webhookError: any) {
+      failedTopics.push({
+        topic,
+        error: webhookError?.response?.data?.errors || webhookError?.message || "unknown_error",
+      });
+    }
+  }
+
+  if (failedTopics.length === WEBHOOK_TOPICS.length) {
+    throw new HttpError(
+      502,
+      "webhook_setup_failed",
+      "Failed to register Shopify webhooks for all topics",
+    );
+  }
+
+  return {
+    webhookAddress,
+    createdTopics,
+    skippedTopics,
+    failedTopics,
+  };
+}
+
+function runPostConnectBootstrap(brandId: string): void {
+  setTimeout(async () => {
+    try {
+      const brand = await findBrandById(brandId);
+      if (!brand) {
+        logger.warn("Post-connect bootstrap skipped: brand not found", { brandId });
+        return;
+      }
+
+      try {
+        const webhookResult = await registerWebhooksForBrand(brand as Record<string, unknown>);
+        logger.info("Post-connect webhook bootstrap completed", {
+          brandId,
+          created: webhookResult.createdTopics.length,
+          skipped: webhookResult.skippedTopics.length,
+          failed: webhookResult.failedTopics.length,
+        });
+      } catch (webhookError: any) {
+        logger.error("Post-connect webhook bootstrap failed", {
+          brandId,
+          error: webhookError.message,
+        });
+      }
+
+      try {
+        await shopifySyncService.syncBrand(brandId, { wipeExistingData: true });
+      } catch (syncError: any) {
+        logger.error("Post-connect full sync failed", {
+          brandId,
+          error: syncError.message,
+        });
+      }
+    } catch (error: any) {
+      logger.error("Post-connect bootstrap crashed", {
+        brandId,
+        error: error.message,
+      });
+    }
+  }, 0);
 }
 
 async function exchangeCodeForAccessToken(params: {
@@ -657,6 +870,9 @@ async function completeOAuthCallback(params: {
   if (!brand) {
     brand = await resolveBrandForOAuth(oauthState, shopDomain);
   }
+  if (oauthState.user_id) {
+    await ensureUserSingleBrand(oauthState.user_id, String((brand as Record<string, unknown>).id));
+  }
   const beforeConnectionState = getPublicBrandConnection(brand as Record<string, unknown>);
 
   await updateBrandConnection({
@@ -684,6 +900,8 @@ async function completeOAuthCallback(params: {
   }
 
   await deleteOAuthState(params.state);
+
+  runPostConnectBootstrap(String((brand as Record<string, unknown>).id));
 
   logger.info("Shopify OAuth completed", {
     brandId: brand.id,
@@ -718,6 +936,25 @@ router.get("/auth", authenticate, async (req: AuthRequest, res: Response) => {
     if (!brand) {
       throw new HttpError(404, "brand_not_found", "Brand not found");
     }
+    if (req.user?.id) {
+      const primaryBrandId = await getUserPrimaryBrandId(req.user.id);
+      if (!primaryBrandId) {
+        const alreadyConnected = Boolean(
+          (brand as Record<string, unknown>).shopify_access_token ||
+          (brand as Record<string, unknown>).access_token ||
+          (brand as Record<string, unknown>).connected_at,
+        );
+        if (alreadyConnected) {
+          throw new HttpError(
+            409,
+            "store_already_linked",
+            "This Shopify store is already linked to another account.",
+          );
+        }
+      }
+
+      await ensureUserSingleBrand(req.user.id, brandId);
+    }
 
     const apiKey = (brand.api_key || brand.shopify_api_key || "").toString().trim();
     const apiSecret = (brand.api_secret || brand.webhook_secret || "")
@@ -743,7 +980,7 @@ router.get("/auth", authenticate, async (req: AuthRequest, res: Response) => {
       apiSecret,
     });
 
-    const installUrl = buildOAuthUrl(shopDomain, apiKey, state);
+    const installUrl = buildOAuthUrl(shopDomain, apiKey, state, resolveRedirectUri(req));
     logger.info("Initiating Shopify OAuth", { brandId, shopDomain });
 
     const wantsJson =
@@ -761,6 +998,10 @@ router.get("/auth", authenticate, async (req: AuthRequest, res: Response) => {
 
     res.redirect(installUrl);
   } catch (error: any) {
+    if (error instanceof BrandAccessError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+
     const status = error instanceof HttpError ? error.status : 500;
     const message = error instanceof HttpError ? error.message : "Failed to initiate OAuth";
     logger.error("Shopify OAuth initiation failed", { error: error.message });
@@ -795,16 +1036,11 @@ router.post("/get-install-url", authenticate, async (req: AuthRequest, res: Resp
       if (!brand) {
         throw new HttpError(404, "brand_not_found", "Brand not found");
       }
-    } else {
-      const { data: byShop, error: byShopError } = await supabase
-        .from("brands")
-        .select("*")
-        .eq("shopify_domain", shopDomain)
-        .maybeSingle();
-      if (byShopError) {
-        throw byShopError;
+      if (req.user?.id) {
+        await ensureUserSingleBrand(req.user.id, brandId);
       }
-      brand = byShop;
+    } else {
+      brand = await findBrandByShopDomain(shopDomain);
 
       if (!brand) {
         const byApiKey = await findBrandByOptionalColumn("api_key", apiKey);
@@ -817,9 +1053,47 @@ router.post("/get-install-url", authenticate, async (req: AuthRequest, res: Resp
       }
 
       if (!brand) {
+        const primaryBrandId = await getUserPrimaryBrandId(req.user?.id);
+        if (primaryBrandId) {
+          throw new HttpError(
+            409,
+            "single_store_limit",
+            "Each account is limited to one Shopify store. Disconnect current store first.",
+          );
+        }
+
         // New merchant flow: create brand on the fly from shop domain.
         brand = await resolveOrCreateBrandForInstall(shopDomain);
       }
+    }
+
+    if (req.user?.id) {
+      const primaryBrandId = await getUserPrimaryBrandId(req.user.id);
+      if (primaryBrandId && primaryBrandId !== String(brand.id)) {
+        throw new HttpError(
+          409,
+          "single_store_limit",
+          "Each account is limited to one Shopify store. Disconnect current store first.",
+        );
+      }
+
+      if (!primaryBrandId) {
+        const alreadyConnected = Boolean(
+          (brand as Record<string, unknown>).shopify_access_token ||
+          (brand as Record<string, unknown>).access_token ||
+          (brand as Record<string, unknown>).connected_at,
+        );
+
+        if (alreadyConnected && !brandId) {
+          throw new HttpError(
+            409,
+            "store_already_linked",
+            "This Shopify store is already linked to another account.",
+          );
+        }
+      }
+
+      await ensureUserSingleBrand(req.user.id, String(brand.id));
     }
 
     const credentialUpdates: Record<string, unknown> = {
@@ -849,11 +1123,15 @@ router.post("/get-install-url", authenticate, async (req: AuthRequest, res: Resp
     });
 
     res.json({
-      installUrl: buildOAuthUrl(shopDomain, apiKey, state),
+      installUrl: buildOAuthUrl(shopDomain, apiKey, state, resolveRedirectUri(req)),
       state,
       brandId: brand.id,
     });
   } catch (error: any) {
+    if (error instanceof BrandAccessError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+
     const schemaMismatch = isSchemaMismatchError(error);
     const supabaseAccessError = isSupabaseAccessError(error);
     const status =
@@ -897,6 +1175,10 @@ router.post("/callback", async (req: Request, res: Response) => {
       shop: result.shopDomain,
     });
   } catch (error: any) {
+    if (error instanceof BrandAccessError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+
     const status = error instanceof HttpError ? error.status : 500;
     const message = error instanceof HttpError ? error.message : "OAuth callback failed";
     logger.error("POST callback failed", { error: error.message });
@@ -940,7 +1222,12 @@ router.get("/callback", async (req: Request, res: Response) => {
       `${FRONTEND_URL}/settings?oauth=success&brand=${encodeURIComponent(brandName)}`,
     );
   } catch (error: any) {
-    const errorCode = error instanceof HttpError ? error.code : "oauth_failed";
+    const errorCode =
+      error instanceof BrandAccessError
+        ? error.code
+        : error instanceof HttpError
+          ? error.code
+          : "oauth_failed";
     logger.error("GET callback failed", { error: error.message, code: errorCode });
     res.redirect(
       `${FRONTEND_URL}/settings?oauth=error&msg=${encodeURIComponent(errorCode)}`,
@@ -952,9 +1239,18 @@ router.get("/callback", async (req: Request, res: Response) => {
  * GET /api/shopify/brands
  * Lightweight brand list for settings pages.
  */
-router.get("/brands", authenticate, async (_req: AuthRequest, res: Response) => {
+router.get("/brands", authenticate, async (req: AuthRequest, res: Response) => {
   try {
-    const { data, error } = await supabase.from("brands").select("*").order("name");
+    const primaryBrandId = await getUserPrimaryBrandId(req.user?.id);
+    if (!primaryBrandId) {
+      return res.json({ brands: [] });
+    }
+
+    const { data, error } = await supabase
+      .from("brands")
+      .select("*")
+      .eq("id", primaryBrandId)
+      .order("name");
     if (error) {
       throw error;
     }
@@ -991,89 +1287,21 @@ router.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const { brandId } = req.params;
+      await assertUserBrandAccess(req.user?.id, brandId);
       const brand = await findBrandById(brandId);
       if (!brand) {
         throw new HttpError(404, "brand_not_found", "Brand not found");
       }
-
-      const accessToken = (brand.shopify_access_token || brand.access_token || "").toString();
-      if (!accessToken) {
-        throw new HttpError(400, "not_connected", "Brand is not connected to Shopify");
-      }
-
       const shopDomain = normalizeShopDomain(String(brand.shopify_domain || ""));
-      if (!shopDomain) {
-        throw new HttpError(400, "missing_shop_domain", "Brand is missing shopify_domain");
-      }
-
-      const webhookAddress = `${BACKEND_BASE_URL}/api/webhooks/shopify`;
-      const adminApiBase = `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}`;
-
-      const { data: existingResponse } = await axios.get(`${adminApiBase}/webhooks.json`, {
-        headers: {
-          "X-Shopify-Access-Token": accessToken,
-        },
-        timeout: SHOPIFY_HTTP_TIMEOUT_MS,
-      });
-
-      const existingWebhooks: any[] = existingResponse?.webhooks || [];
-      const existingTopicSet = new Set(
-        existingWebhooks
-          .filter((hook) => String(hook?.address || "").trim() === webhookAddress)
-          .map((hook) => String(hook?.topic || "").trim()),
-      );
-
-      const createdTopics: string[] = [];
-      const skippedTopics: string[] = [];
-      const failedTopics: { topic: string; error: string }[] = [];
-
-      for (const topic of WEBHOOK_TOPICS) {
-        if (existingTopicSet.has(topic)) {
-          skippedTopics.push(topic);
-          continue;
-        }
-
-        try {
-          await axios.post(
-            `${adminApiBase}/webhooks.json`,
-            {
-              webhook: {
-                topic,
-                address: webhookAddress,
-                format: "json",
-              },
-            },
-            {
-              headers: {
-                "X-Shopify-Access-Token": accessToken,
-              },
-              timeout: SHOPIFY_HTTP_TIMEOUT_MS,
-            },
-          );
-          createdTopics.push(topic);
-        } catch (webhookError: any) {
-          failedTopics.push({
-            topic,
-            error: webhookError?.response?.data?.errors || webhookError?.message || "unknown_error",
-          });
-        }
-      }
-
-      if (failedTopics.length === WEBHOOK_TOPICS.length) {
-        throw new HttpError(
-          502,
-          "webhook_setup_failed",
-          "Failed to register Shopify webhooks for all topics",
-        );
-      }
+      const webhookResult = await registerWebhooksForBrand(brand as Record<string, unknown>);
 
       logger.info("Shopify webhook setup completed", {
         brandId,
         requestedBy: req.user?.id,
         shopDomain,
-        created: createdTopics.length,
-        skipped: skippedTopics.length,
-        failed: failedTopics.length,
+        created: webhookResult.createdTopics.length,
+        skipped: webhookResult.skippedTopics.length,
+        failed: webhookResult.failedTopics.length,
       });
 
       await logAuditEvent({
@@ -1083,22 +1311,26 @@ router.post(
         recordId: brandId,
         meta: {
           requested_by: req.user?.id,
-          webhook_address: webhookAddress,
-          created_topics: createdTopics,
-          skipped_topics: skippedTopics,
-          failed_topics: failedTopics,
+          webhook_address: webhookResult.webhookAddress,
+          created_topics: webhookResult.createdTopics,
+          skipped_topics: webhookResult.skippedTopics,
+          failed_topics: webhookResult.failedTopics,
         },
       });
 
       res.json({
         success: true,
-        message: `Webhook setup completed. Created ${createdTopics.length}, skipped ${skippedTopics.length}, failed ${failedTopics.length}.`,
-        webhook_address: webhookAddress,
-        created_topics: createdTopics,
-        skipped_topics: skippedTopics,
-        failed_topics: failedTopics,
+        message: `Webhook setup completed. Created ${webhookResult.createdTopics.length}, skipped ${webhookResult.skippedTopics.length}, failed ${webhookResult.failedTopics.length}.`,
+        webhook_address: webhookResult.webhookAddress,
+        created_topics: webhookResult.createdTopics,
+        skipped_topics: webhookResult.skippedTopics,
+        failed_topics: webhookResult.failedTopics,
       });
     } catch (error: any) {
+      if (error instanceof BrandAccessError) {
+        return res.status(error.status).json({ error: error.message, code: error.code });
+      }
+
       const status = error instanceof HttpError ? error.status : 500;
       const message = error instanceof HttpError ? error.message : "Failed to setup webhooks";
       res.status(status).json({ error: message });
@@ -1115,6 +1347,7 @@ router.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const { brandId } = req.params;
+      await assertUserBrandAccess(req.user?.id, brandId);
       const brand = await findBrandById(brandId);
       if (!brand) {
         throw new HttpError(404, "brand_not_found", "Brand not found");
@@ -1122,6 +1355,7 @@ router.post(
 
       const beforeConnectionState = getPublicBrandConnection(brand as Record<string, unknown>);
       await clearBrandConnection(brand as Record<string, unknown>);
+      await clearUserPrimaryBrandIfMatches(req.user?.id, brandId);
       const refreshedBrand = await findBrandById(brandId);
       const afterConnectionState = refreshedBrand
         ? getPublicBrandConnection(refreshedBrand as Record<string, unknown>)
@@ -1139,6 +1373,10 @@ router.post(
       logger.info("Brand disconnected from Shopify", { brandId, userId: req.user?.id });
       res.json({ success: true, message: "Brand disconnected successfully" });
     } catch (error: any) {
+      if (error instanceof BrandAccessError) {
+        return res.status(error.status).json({ error: error.message, code: error.code });
+      }
+
       const status = error instanceof HttpError ? error.status : 500;
       const message = error instanceof HttpError ? error.message : "Failed to disconnect brand";
       logger.error("Disconnect failed", { error: error.message });
@@ -1156,6 +1394,7 @@ router.get(
   async (_req: AuthRequest, res: Response) => {
     try {
       const { brandId } = _req.params;
+      await assertUserBrandAccess(_req.user?.id, brandId);
       const brand = await findBrandById(brandId);
       if (!brand) {
         throw new HttpError(404, "brand_not_found", "Brand not found");
@@ -1163,6 +1402,10 @@ router.get(
 
       res.json(getPublicBrandConnection(brand as Record<string, unknown>));
     } catch (error: any) {
+      if (error instanceof BrandAccessError) {
+        return res.status(error.status).json({ error: error.message, code: error.code });
+      }
+
       const status = error instanceof HttpError ? error.status : 500;
       const message = error instanceof HttpError ? error.message : "Failed to get Shopify status";
       logger.error("Status request failed", { error: error.message });

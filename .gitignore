@@ -1,43 +1,180 @@
+# ═══════════════════════════════════════════════════════════
+# Tetiano Inventory System - Git Ignore
+# ═══════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════
 # Dependencies
+# ═══════════════════════════════════════════════════════════
 node_modules/
 .pnp
 .pnp.js
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
 
+# ═══════════════════════════════════════════════════════════
 # Testing
+# ═══════════════════════════════════════════════════════════
 coverage/
+.nyc_output/
+*.test.js.snap
 
-# Production
+# ═══════════════════════════════════════════════════════════
+# Production Builds
+# ═══════════════════════════════════════════════════════════
 build/
 dist/
+out/
+.next/
+.vercel/
+.railway/
 
-# Environment
+# ═══════════════════════════════════════════════════════════
+# Environment Variables (CRITICAL - NEVER COMMIT!)
+# ═══════════════════════════════════════════════════════════
 .env
 .env.local
+.env.development
 .env.development.local
+.env.test
 .env.test.local
+.env.production
 .env.production.local
+.env.*.local
 
+# Backend environment
+backend/.env
+backend/.env.local
+backend/.env.production
+
+# Frontend environment
+frontend/.env
+frontend/.env.local
+frontend/.env.production
+
+# ⚠️ IMPORTANT: .env.example files SHOULD be committed
+# They serve as templates without sensitive data
+!.env.example
+!backend/.env.example
+!frontend/.env.example
+
+# ═══════════════════════════════════════════════════════════
 # Logs
-logs
+# ═══════════════════════════════════════════════════════════
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+.pnpm-debug.log
 
-# Editor
+# ═══════════════════════════════════════════════════════════
+# Editor & IDE
+# ═══════════════════════════════════════════════════════════
+# VSCode
 .vscode/*
 !.vscode/extensions.json
-.idea
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# ═══════════════════════════════════════════════════════════
+# Operating System
+# ═══════════════════════════════════════════════════════════
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ═══════════════════════════════════════════════════════════
+# TypeScript
+# ═══════════════════════════════════════════════════════════
+*.tsbuildinfo
+.tsbuildinfo
+
+# ═══════════════════════════════════════════════════════════
+# Temporary Files
+# ═══════════════════════════════════════════════════════════
+.cache/
+.temp/
+.tmp/
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+
+# ═══════════════════════════════════════════════════════════
+# Database
+# ═══════════════════════════════════════════════════════════
+*.sqlite
+*.sqlite3
+*.db
+
+# ═══════════════════════════════════════════════════════════
+# Secrets & Credentials (CRITICAL - NEVER COMMIT!)
+# ═══════════════════════════════════════════════════════════
+secrets/
+credentials/
+*.pem
+*.key
+*.cert
+*.crt
+*.p12
+*.pfx
+.secrets
+.credentials
+
+# Supabase service keys
+*service_role_key*
+*service-role-key*
+
+# Shopify credentials
+*shopify_access_token*
+*shopify-access-token*
+
+# ═══════════════════════════════════════════════════════════
+# Documentation (Keep these - they're important!)
+# ═══════════════════════════════════════════════════════════
+# All .md files should be committed
+# !*.md
+# !docs/**/*.md
+
+# ═══════════════════════════════════════════════════════════
+# Misc
+# ═══════════════════════════════════════════════════════════
+.eslintcache
+.stylelintcache
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
-
-# Misc
-.cache
-.temp
-*.tsbuildinfo

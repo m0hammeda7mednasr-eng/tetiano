@@ -125,6 +125,11 @@ CORS_ALLOWED_ORIGINS=https://tetiano.vercel.app,https://tetiano-git-main-mohs-pr
 3. **Missing Environment Variables**
    - تأكد من وجود جميع المتغيرات المطلوبة
 
+4. **Schema mismatch في جدول `brands`**
+   - إذا ظهر خطأ مثل: `column brands.shopify_api_key does not exist`
+   - شغّل migration: `supabase/migrations/015_shopify_schema_compat.sql`
+   - هذا يضيف أعمدة التوافق: `shopify_api_key`, `shopify_access_token`
+
 ### خطأ: Invalid OAuth State
 
 **المشكلة**: `Invalid OAuth state` بعد الـ callback

@@ -15,6 +15,23 @@ export interface StockMovement {
   userId?: string;
 }
 
+function extractShopifyId(value: unknown): string {
+  if (!value) return "";
+  const parts = String(value).split("/");
+  return parts[parts.length - 1] || "";
+}
+
+function isSchemaCompatibilityError(error: any): boolean {
+  const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    text.includes("column") ||
+    text.includes("relation") ||
+    text.includes("does not exist") ||
+    text.includes("schema cache") ||
+    text.includes("unknown relationship")
+  );
+}
+
 export class InventoryService {
   // Record stock movement in ledger
   async recordStockMovement(movement: StockMovement): Promise<void> {
@@ -88,7 +105,7 @@ export class InventoryService {
     const { data: variant, error: variantError } = await supabase
       .from('variants')
       .select(
-        'id, brand_id, shopify_variant_id, brands(name, shopify_domain, shopify_location_id, shopify_access_token, access_token)',
+        'id, brand_id, shopify_variant_id, inventory_item_id, brands(*)',
       )
       .eq('id', variantId)
       .single();
@@ -112,7 +129,12 @@ export class InventoryService {
     }
 
     // Get Shopify config
-    const brandInfo = variant.brands as any;
+    const brandInfo = Array.isArray(variant.brands)
+      ? (variant.brands[0] as any)
+      : (variant.brands as any);
+    if (!brandInfo) {
+      throw new Error('Brand configuration not found for variant');
+    }
     const brandName = brandInfo.name;
     const shopifyConfig = getShopifyConfig(brandName, {
       domain: brandInfo.shopify_domain,
@@ -123,7 +145,10 @@ export class InventoryService {
     const shopifyService = new ShopifyService(shopifyConfig);
 
     // Adjust in Shopify
-    const inventoryItemId = variant.shopify_variant_id;
+    const inventoryItemId = variant.inventory_item_id || variant.shopify_variant_id;
+    if (!inventoryItemId) {
+      throw new Error('Variant is missing Shopify inventory identifier');
+    }
     await shopifyService.adjustInventory(inventoryItemId, delta, reason);
 
     // Update local inventory
@@ -151,11 +176,15 @@ export class InventoryService {
 
   // Sync product from Shopify
   async syncProduct(brandId: string, shopifyProductId: string): Promise<void> {
-    const { data: brand } = await supabase
+    const { data: brand, error: brandError } = await supabase
       .from('brands')
-      .select('name, shopify_domain, shopify_location_id, shopify_access_token, access_token')
+      .select('*')
       .eq('id', brandId)
-      .single();
+      .maybeSingle();
+
+    if (brandError) {
+      throw brandError;
+    }
 
     if (!brand) {
       throw new Error('Brand not found');
@@ -175,48 +204,140 @@ export class InventoryService {
       throw new Error('Product not found in Shopify');
     }
 
-    // Upsert product
-    const { data: dbProduct, error: productError } = await supabase
+    const fullProductPayload = {
+      brand_id: brandId,
+      shopify_product_id: shopifyProductId,
+      title: product.title,
+      handle: product.handle,
+      product_type: product.productType,
+      vendor: product.vendor,
+      status: product.status,
+      shopify_payload: product,
+    };
+    const minimalProductPayload = {
+      brand_id: brandId,
+      shopify_product_id: shopifyProductId,
+      title: product.title,
+      handle: product.handle,
+      product_type: product.productType,
+      vendor: product.vendor,
+      status: product.status,
+    };
+
+    let dbProduct: any = null;
+    const fullProductResult = await supabase
       .from('products')
-      .upsert(
-        {
-          brand_id: brandId,
-          shopify_product_id: shopifyProductId,
-          title: product.title,
-          handle: product.handle,
-          product_type: product.productType,
-          vendor: product.vendor,
-          status: product.status,
-        },
-        { onConflict: 'brand_id,shopify_product_id' }
-      )
-      .select()
+      .upsert(fullProductPayload, { onConflict: 'brand_id,shopify_product_id' })
+      .select('id')
       .single();
 
-    if (productError) {
-      throw productError;
+    if (fullProductResult.error) {
+      if (!isSchemaCompatibilityError(fullProductResult.error)) {
+        throw fullProductResult.error;
+      }
+
+      const fallbackProductResult = await supabase
+        .from('products')
+        .upsert(minimalProductPayload, { onConflict: 'brand_id,shopify_product_id' })
+        .select('id')
+        .single();
+
+      if (fallbackProductResult.error) {
+        throw fallbackProductResult.error;
+      }
+      dbProduct = fallbackProductResult.data;
+    } else {
+      dbProduct = fullProductResult.data;
     }
 
     // Sync variants
     for (const variantEdge of product.variants.edges) {
       const variant = variantEdge.node;
-      const shopifyVariantId = variant.id.split('/').pop();
+      const shopifyVariantId = extractShopifyId(variant.id);
+      if (!shopifyVariantId) {
+        continue;
+      }
 
-      await supabase.from('variants').upsert(
+      const selectedOptions = Array.isArray(variant.selectedOptions) ? variant.selectedOptions : [];
+      const option1 = selectedOptions[0]?.value || null;
+      const option2 = selectedOptions[1]?.value || null;
+      const option3 = selectedOptions[2]?.value || null;
+
+      const fullVariantPayload = {
+        product_id: dbProduct.id,
+        brand_id: brandId,
+        shopify_variant_id: shopifyVariantId,
+        title: variant.title,
+        sku: variant.sku,
+        barcode: variant.barcode,
+        price: variant.price ? parseFloat(variant.price) : null,
+        compare_at_price: variant.compareAtPrice ? parseFloat(variant.compareAtPrice) : null,
+        position: Number.isFinite(Number(variant.position)) ? Number(variant.position) : null,
+        option1,
+        option2,
+        option3,
+        inventory_item_id: extractShopifyId(variant.inventoryItem?.id) || null,
+        inventory_quantity: Number.isFinite(Number(variant.inventoryQuantity))
+          ? Number(variant.inventoryQuantity)
+          : null,
+        shopify_payload: variant,
+      };
+
+      const minimalVariantPayload = {
+        product_id: dbProduct.id,
+        brand_id: brandId,
+        shopify_variant_id: shopifyVariantId,
+        title: variant.title,
+        sku: variant.sku,
+        barcode: variant.barcode,
+        price: variant.price ? parseFloat(variant.price) : null,
+        compare_at_price: variant.compareAtPrice ? parseFloat(variant.compareAtPrice) : null,
+        position: Number.isFinite(Number(variant.position)) ? Number(variant.position) : null,
+        option1,
+        option2,
+        option3,
+      };
+
+      let dbVariant: any = null;
+      const fullVariantResult = await supabase
+        .from('variants')
+        .upsert(fullVariantPayload, { onConflict: 'brand_id,shopify_variant_id' })
+        .select('id')
+        .single();
+
+      if (fullVariantResult.error) {
+        if (!isSchemaCompatibilityError(fullVariantResult.error)) {
+          throw fullVariantResult.error;
+        }
+
+        const fallbackVariantResult = await supabase
+          .from('variants')
+          .upsert(minimalVariantPayload, { onConflict: 'brand_id,shopify_variant_id' })
+          .select('id')
+          .single();
+
+        if (fallbackVariantResult.error) {
+          throw fallbackVariantResult.error;
+        }
+        dbVariant = fallbackVariantResult.data;
+      } else {
+        dbVariant = fullVariantResult.data;
+      }
+
+      const inventoryQuantity = Number.isFinite(Number(variant.inventoryQuantity))
+        ? Number(variant.inventoryQuantity)
+        : 0;
+      const { error: inventoryError } = await supabase.from('inventory_levels').upsert(
         {
-          product_id: dbProduct.id,
+          variant_id: dbVariant.id,
           brand_id: brandId,
-          shopify_variant_id: shopifyVariantId,
-          title: variant.title,
-          sku: variant.sku,
-          barcode: variant.barcode,
-          price: parseFloat(variant.price),
-          compare_at_price: variant.compareAtPrice
-            ? parseFloat(variant.compareAtPrice)
-            : null,
+          available: inventoryQuantity,
         },
-        { onConflict: 'brand_id,shopify_variant_id' }
+        { onConflict: 'variant_id' },
       );
+      if (inventoryError) {
+        throw inventoryError;
+      }
     }
 
     logger.info('Product synced', { brandId, shopifyProductId });
