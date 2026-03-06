@@ -9,6 +9,7 @@ export interface UserProfile {
   role: "admin" | "manager" | "staff" | "owner" | "operator" | "user" | "viewer";
   store_role?: "admin" | "manager" | "staff" | "viewer";
   store_id?: string | null;
+  primary_brand_id?: string | null;
   is_active: boolean;
   avatar_color: string;
   permissions?: string[] | Record<string, boolean> | null;
@@ -110,20 +111,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
 
     // Best-effort profile row creation before backend bootstrap.
-    const { error: profileUpsertError } = await supabase
-      .from("user_profiles")
-      .upsert({
-        id: sessionUser.id,
-        full_name,
-        role: "admin",
-        is_active: true,
-        avatar_color: randomProfileColor(),
-      });
+    const baseProfilePayload = {
+      id: sessionUser.id,
+      full_name,
+      is_active: true,
+      avatar_color: randomProfileColor(),
+    };
 
-    if (profileUpsertError) {
+    let profileUpsert = await supabase.from("user_profiles").upsert({
+      ...baseProfilePayload,
+      role: "admin",
+    });
+    if (profileUpsert.error && isSchemaCompatibilityError(profileUpsert.error)) {
+      profileUpsert = await supabase.from("user_profiles").upsert(baseProfilePayload);
+    }
+
+    if (profileUpsert.error) {
       console.warn(
         "Failed to seed profile for new signup",
-        profileUpsertError.message,
+        profileUpsert.error.message,
       );
     }
 
@@ -161,18 +167,23 @@ async function fetchAndSetProfile(
   set: (state: Partial<AuthState>) => void,
 ) {
   try {
-    let profile = await getProfileWithRetry(user.id);
+    let profile = await getProfileFromApi(user.id);
+    if (!profile) {
+      profile = await getProfileWithRetry(user.id);
+    }
 
-    if (!profile?.store_id) {
+    if (!resolveProfileStoreId(profile)) {
       try {
-        await api.post("/api/onboarding/bootstrap-store");
-        profile = await getProfileWithRetry(user.id, 6, 250);
+        const didBootstrap = await tryBootstrapStore();
+        if (didBootstrap) {
+          profile = (await getProfileFromApi(user.id)) || (await getProfileWithRetry(user.id, 6, 250));
+        }
       } catch (bootstrapError) {
         console.warn("Store bootstrap failed", bootstrapError);
       }
     }
 
-    const normalizedRole = normalizeRole(profile?.role);
+    const normalizedRole = normalizeRole(profile?.store_role || profile?.role);
     const profilePermissions = toPermissionMap(profile?.permissions);
     const perms = mergePermissionMaps(
       profilePermissions,
@@ -212,10 +223,16 @@ async function fetchAndSetProfile(
 
 async function getProfileWithRetry(userId: string, retries = 6, delayMs = 300) {
   const profileSelectVariants = [
-    "id, full_name, role, store_id, is_active, avatar_color, permissions",
-    "id, full_name, role, store_id, is_active, avatar_color",
+    "id, full_name, role, store_role, store_id, primary_brand_id, is_active, avatar_color, permissions",
+    "id, full_name, role, store_id, primary_brand_id, is_active, avatar_color, permissions",
+    "id, full_name, role, store_id, primary_brand_id, is_active, avatar_color",
+    "id, full_name, store_role, store_id, primary_brand_id, is_active, avatar_color, permissions",
+    "id, full_name, store_id, primary_brand_id, is_active, avatar_color, permissions",
+    "id, full_name, store_id, primary_brand_id, is_active, avatar_color",
     "id, full_name, role, is_active, avatar_color, permissions",
     "id, full_name, role, is_active, avatar_color",
+    "id, full_name, is_active, avatar_color, permissions",
+    "id, full_name, is_active, avatar_color",
   ];
 
   for (let attempt = 0; attempt < retries; attempt += 1) {
@@ -253,6 +270,59 @@ async function getProfileWithRetry(userId: string, retries = 6, delayMs = 300) {
   return null;
 }
 
+async function getProfileFromApi(userId: string): Promise<UserProfile | null> {
+  try {
+    const { data } = await api.get("/api/app/me");
+    const profile = data?.profile ?? null;
+    const user = data?.user ?? null;
+    const store = data?.store ?? null;
+
+    if (!profile && !user) return null;
+
+    return {
+      id: String(profile?.id || user?.id || userId),
+      full_name: String(profile?.full_name || user?.email?.split?.("@")?.[0] || "User"),
+      role: normalizeRole(profile?.store_role || user?.store_role || profile?.role),
+      store_role: normalizeStoreRole(profile?.store_role || user?.store_role || profile?.role),
+      store_id: resolveApiStoreId(profile, store),
+      primary_brand_id: profile?.primary_brand_id || null,
+      is_active: profile?.is_active !== false,
+      avatar_color: String(profile?.avatar_color || randomProfileColor()),
+      permissions: user?.permissions || profile?.permissions || null,
+    };
+  } catch (error: any) {
+    if (isExpectedApiFallbackError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function tryBootstrapStore(): Promise<boolean> {
+  try {
+    await api.post("/api/onboarding/bootstrap-store");
+    return true;
+  } catch (error: any) {
+    if (error?.response?.status === 404) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function resolveProfileStoreId(profile: any): string | null {
+  return profile?.store_id || profile?.primary_brand_id || null;
+}
+
+function resolveApiStoreId(profile: any, store: any): string | null {
+  return profile?.store_id || profile?.primary_brand_id || store?.id || null;
+}
+
+function isExpectedApiFallbackError(error: any): boolean {
+  const status = Number(error?.response?.status || 0);
+  return status === 401 || status === 403 || status === 404;
+}
+
 function isSchemaCompatibilityError(error: any): boolean {
   const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
   return (
@@ -268,6 +338,14 @@ function normalizeRole(role: unknown): "admin" | "manager" | "staff" {
   const value = typeof role === "string" ? role.toLowerCase() : "";
   if (value === "admin" || value === "owner") return "admin";
   if (value === "manager") return "manager";
+  return "staff";
+}
+
+function normalizeStoreRole(role: unknown): "admin" | "manager" | "staff" | "viewer" {
+  const value = typeof role === "string" ? role.toLowerCase() : "";
+  if (value === "admin" || value === "owner") return "admin";
+  if (value === "manager") return "manager";
+  if (value === "viewer") return "viewer";
   return "staff";
 }
 

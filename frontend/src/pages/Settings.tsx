@@ -30,6 +30,14 @@ interface ShopifyStatus {
   updated_at?: string | null;
 }
 
+function getApiErrorMessage(err: any, fallback: string): string {
+  const status = Number(err?.response?.status || 0);
+  if (status === 404) {
+    return "نسخة الـBackend الحالية لا تحتوي مسارات /api/app المطلوبة. قم بنشر آخر إصدار للخدمة على Railway.";
+  }
+  return err?.response?.data?.error || fallback;
+}
+
 function normalizeShopDomain(input: string): string {
   const normalized = input.trim().toLowerCase().replace(/^https?:\/\//, "");
   if (!normalized) return "";
@@ -99,7 +107,7 @@ export default function Settings() {
     } catch (err: any) {
       setMessage({
         type: "error",
-        text: err?.response?.data?.error || "فشل تحميل حالة Shopify.",
+        text: getApiErrorMessage(err, "فشل تحميل حالة Shopify."),
       });
       setStatus(null);
     } finally {
@@ -119,7 +127,7 @@ export default function Settings() {
       });
       await fetchStatus();
     } catch (err: any) {
-      setMessage({ type: "error", text: err?.response?.data?.error || "فشلت المزامنة." });
+      setMessage({ type: "error", text: getApiErrorMessage(err, "فشلت المزامنة.") });
     } finally {
       setSyncing(false);
     }
@@ -134,7 +142,7 @@ export default function Settings() {
       setMessage({ type: "info", text: "تم فصل متجر Shopify بنجاح." });
       await fetchStatus();
     } catch (err: any) {
-      setMessage({ type: "error", text: err?.response?.data?.error || "فشل فصل المتجر." });
+      setMessage({ type: "error", text: getApiErrorMessage(err, "فشل فصل المتجر.") });
     } finally {
       setDisconnecting(false);
     }
@@ -157,7 +165,7 @@ export default function Settings() {
       });
       window.location.href = data.install_url || data.installUrl;
     } catch (err: any) {
-      setOauthError(err?.response?.data?.error || "تعذر بدء الربط مع Shopify.");
+      setOauthError(getApiErrorMessage(err, "تعذر بدء الربط مع Shopify."));
       setOauthLoading(false);
     }
   };
