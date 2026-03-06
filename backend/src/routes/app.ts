@@ -1206,33 +1206,58 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
     return res.status(400).json({ error: "Invalid Shopify domain" });
   }
 
-  // Use the dedicated OAuth route (more resilient to schema mismatches).
   try {
-    const legacy = await requestLegacyInstallUrl(req, {
-      shop: shopDomain,
-      api_key: apiKey,
-      api_secret: apiSecret,
-      brand_id: storeId,
-    });
-
-    return res.json({
-      install_url: legacy.installUrl,
-      state: legacy.state,
-      shop: shopDomain,
-      source: "shopify_oauth_legacy_bridge",
-    });
-  } catch (bridgeError: any) {
-    const status = Number(bridgeError?.status || 0);
-    const responseStatus = status >= 400 ? status : 502;
-    const message = bridgeError?.message || "Failed to start Shopify OAuth flow";
-    logger.error("App shopify connect bridge failed", {
-      status: bridgeError?.status,
-      code: bridgeError?.code,
-      error: bridgeError?.message,
+    // Save credentials to brands table for compatibility
+    await upsertLegacyBrandForStore({
       storeId,
       shopDomain,
+      apiKey,
+      apiSecret,
     });
-    return res.status(responseStatus).json({ error: message });
+
+    // Create OAuth state
+    const state = crypto.randomBytes(32).toString("hex");
+    const stateInsert = await supabase.from("shopify_oauth_states").insert({
+      state,
+      shop: shopDomain,
+      brand_id: storeId,
+      user_id: req.user?.id || null,
+      api_key: apiKey,
+      api_secret: apiSecret,
+      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    });
+    
+    if (stateInsert.error) {
+      logger.error("Failed to create OAuth state", { error: stateInsert.error });
+      throw new Error("Failed to create OAuth state");
+    }
+
+    // Update shopify_connections
+    await supabase.from("shopify_connections").upsert(
+      {
+        store_id: storeId,
+        shop_domain: shopDomain,
+        access_token_encrypted: "",
+        scopes: SHOPIFY_SCOPES,
+        status: "disconnected",
+        updated_at: nowIso(),
+      },
+      { onConflict: "store_id" },
+    );
+
+    // Build install URL
+    const redirectUri = `${resolveBackendUrl(req)}/api/shopify/callback`;
+    const installUrl =
+      `https://${shopDomain}/admin/oauth/authorize?` +
+      `client_id=${encodeURIComponent(apiKey)}&` +
+      `scope=${encodeURIComponent(SHOPIFY_SCOPES)}&` +
+      `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+      `state=${encodeURIComponent(state)}`;
+
+    return res.json({ install_url: installUrl, state, shop: shopDomain });
+  } catch (error: any) {
+    logger.error("App shopify connect failed", { error: error?.message, storeId, shopDomain });
+    return res.status(500).json({ error: "Failed to start Shopify OAuth flow" });
   }
 });
 
