@@ -129,6 +129,10 @@ app.use("/api/shopify", shopifyOAuthRoutes);
 app.use("/api/app", appRoutes);
 app.use("/api/onboarding", onboardingRoutes);
 
+logger.info("API namespaces registered", {
+  routes: ["/api/webhooks", "/api/shopify", "/api/app", "/api/onboarding"],
+});
+
 // ── 404 Handler ───────────────────────────────────────────────
 app.use("*", (req, res) => {
   res.status(404).json({
