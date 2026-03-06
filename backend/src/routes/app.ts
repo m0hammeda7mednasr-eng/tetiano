@@ -1289,6 +1289,12 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
           code: "legacy_brand_mapping_missing",
         });
       }
+      if (status >= 500) {
+        return res.status(503).json({
+          error: error?.message || "Shopify OAuth compatibility endpoint is temporarily unavailable.",
+          code: error?.code || "shopify_oauth_compat_failed",
+        });
+      }
       return res.status(status).json({ error: error?.message || "Failed to start Shopify OAuth flow", code: error?.code });
     }
 

@@ -191,6 +191,10 @@ export const authenticate = async (
       "id, full_name, role, is_active, avatar_color, permissions, store_id",
       "id, full_name, role, is_active, avatar_color, permissions",
       "id, full_name, role, is_active, avatar_color",
+      "id, full_name, is_active, avatar_color, permissions, store_id",
+      "id, full_name, is_active, avatar_color, store_id",
+      "id, full_name, is_active, avatar_color",
+      "id, store_id",
     ];
 
     let profile: any = null;

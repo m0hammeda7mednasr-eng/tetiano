@@ -1136,6 +1136,14 @@ router.post("/get-install-url", authenticate, async (req: AuthRequest, res: Resp
     const supabaseAccessError = isSupabaseAccessError(error);
     const status =
       error instanceof HttpError ? error.status : schemaMismatch || supabaseAccessError ? 503 : 500;
+    const code =
+      error instanceof HttpError
+        ? error.code
+        : schemaMismatch
+          ? "schema_mismatch"
+          : supabaseAccessError
+            ? "supabase_access_error"
+            : String(error?.code || "install_url_failed");
     const message =
       error instanceof HttpError
         ? error.message
@@ -1148,9 +1156,9 @@ router.post("/get-install-url", authenticate, async (req: AuthRequest, res: Resp
       error: error.message,
       details: error.details,
       hint: error.hint,
-      code: error.code,
+      code,
     });
-    res.status(status).json({ error: message });
+    res.status(status).json({ error: message, code });
   }
 });
 

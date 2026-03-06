@@ -48,6 +48,14 @@ CREATE TABLE IF NOT EXISTS shopify_sync_runs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Compatibility with backend route payloads (older/newer naming)
+ALTER TABLE shopify_sync_runs
+  ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS summary_json JSONB,
+  ADD COLUMN IF NOT EXISTS status VARCHAR(30) DEFAULT 'running',
+  ADD COLUMN IF NOT EXISTS error_message TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_shopify_sync_runs_store_id ON shopify_sync_runs(store_id);
 CREATE INDEX IF NOT EXISTS idx_shopify_sync_runs_status ON shopify_sync_runs(status);
 CREATE INDEX IF NOT EXISTS idx_shopify_sync_runs_started_at ON shopify_sync_runs(started_at DESC);
