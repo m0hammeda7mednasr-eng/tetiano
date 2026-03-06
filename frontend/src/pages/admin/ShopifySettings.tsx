@@ -133,20 +133,16 @@ export default function ShopifySettings() {
     try {
       setConnecting(true);
       
-      // Start OAuth flow
-      const res = await api.get("/api/shopify/auth", {
-        params: {
-          shop: oauthData.shop,
-          brand_id: selectedBrand,
-          api_key: oauthData.api_key,
-          api_secret: oauthData.api_secret,
-        },
+      // Build OAuth URL with query parameters
+      const params = new URLSearchParams({
+        shop: oauthData.shop,
+        brand_id: selectedBrand,
+        api_key: oauthData.api_key,
+        api_secret: oauthData.api_secret,
       });
 
-      if (res.data.url) {
-        // Redirect to Shopify OAuth
-        window.location.href = res.data.url;
-      }
+      // Redirect to OAuth endpoint
+      window.location.href = `${backendUrl}/api/shopify/auth?${params.toString()}`;
     } catch (err: any) {
       addToast(err.response?.data?.error || "خطأ في بدء الربط", "error");
       setConnecting(false);
