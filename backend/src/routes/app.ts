@@ -1215,7 +1215,7 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
     const status = Number(bridgeError?.status || 0);
 
     // Propagate business errors from legacy route as-is.
-    if (status >= 400 && status < 500 && status !== 404) {
+    if (status >= 400 && status !== 404 && status !== 502) {
       return res.status(status).json({ error: bridgeError?.message || "Failed to start Shopify OAuth flow" });
     }
 
