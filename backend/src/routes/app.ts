@@ -1,5 +1,6 @@
 import { Router, Response } from "express";
 import crypto from "crypto";
+import axios from "axios";
 import {
   authenticate,
   AuthRequest,
@@ -180,6 +181,38 @@ function canViewFinance(req: AuthRequest): boolean {
   if (req.user?.permissions?.["finance.view_profit"]) return true;
   if (req.user?.permissions?.can_view_finance) return true;
   return false;
+}
+
+async function requestLegacyInstallUrl(req: AuthRequest, payload: Record<string, unknown>) {
+  const authHeader = String(req.headers.authorization || "");
+  const response = await axios.post(`${resolveBackendUrl(req)}/api/shopify/get-install-url`, payload, {
+    headers: {
+      Authorization: authHeader,
+      "Content-Type": "application/json",
+    },
+    timeout: 15_000,
+    validateStatus: () => true,
+  });
+
+  const data = (response.data || {}) as Record<string, any>;
+  if (response.status >= 400) {
+    const err: any = new Error(String(data.error || "Failed to start Shopify OAuth flow"));
+    err.status = response.status;
+    err.code = data.code || null;
+    throw err;
+  }
+
+  const installUrl = String(data.installUrl || data.install_url || "");
+  if (!installUrl) {
+    const err: any = new Error("Legacy Shopify OAuth route did not return install URL");
+    err.status = 502;
+    throw err;
+  }
+
+  return {
+    installUrl,
+    state: data.state ? String(data.state) : null,
+  };
 }
 
 function ensureStoreId(req: AuthRequest, res: Response): string | null {
@@ -1161,6 +1194,38 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
   const shopDomain = normalizeShopDomain(rawShop);
   if (!shopDomain.endsWith(".myshopify.com")) {
     return res.status(400).json({ error: "Invalid Shopify domain" });
+  }
+
+  // Prefer the dedicated OAuth route (more resilient to schema mismatches).
+  try {
+    const legacy = await requestLegacyInstallUrl(req, {
+      shop: shopDomain,
+      api_key: apiKey,
+      api_secret: apiSecret,
+      brand_id: storeId,
+    });
+
+    return res.json({
+      install_url: legacy.installUrl,
+      state: legacy.state,
+      shop: shopDomain,
+      source: "shopify_oauth_legacy_bridge",
+    });
+  } catch (bridgeError: any) {
+    const status = Number(bridgeError?.status || 0);
+
+    // Propagate business errors from legacy route as-is.
+    if (status >= 400 && status < 500 && status !== 404) {
+      return res.status(status).json({ error: bridgeError?.message || "Failed to start Shopify OAuth flow" });
+    }
+
+    logger.warn("App shopify connect legacy bridge failed, falling back to app route logic", {
+      status: bridgeError?.status,
+      code: bridgeError?.code,
+      error: bridgeError?.message,
+      storeId,
+      shopDomain,
+    });
   }
 
   try {
