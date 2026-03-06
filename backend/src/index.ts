@@ -19,6 +19,7 @@ import { errorHandler } from "./middleware/errorHandler";
 const app = express();
 const PORT = process.env.PORT || 3002;
 
+// CORS Configuration - Updated for Vercel and Railway
 const configuredOrigins = [
   process.env.FRONTEND_URL,
   process.env.CORS_ALLOWED_ORIGINS,
