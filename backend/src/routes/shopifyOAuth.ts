@@ -10,9 +10,30 @@ const router = Router();
 
 const SHOPIFY_API_VERSION = "2024-01";
 const OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+const SHOPIFY_HTTP_TIMEOUT_MS = Number(process.env.SHOPIFY_HTTP_TIMEOUT_MS || "15000");
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+function resolveBackendBaseUrl(): string {
+  const explicit = (process.env.BACKEND_URL || process.env.API_URL || "").trim();
+  if (explicit) {
+    return trimTrailingSlash(explicit);
+  }
+  const port = (process.env.PORT || "3002").trim();
+  return `http://localhost:${port}`;
+}
+
+function resolveFrontendUrl(): string {
+  const explicit = (process.env.FRONTEND_URL || "").trim();
+  return explicit ? trimTrailingSlash(explicit) : "http://localhost:5173";
+}
+
+const BACKEND_BASE_URL = resolveBackendBaseUrl();
+const FRONTEND_URL = resolveFrontendUrl();
 const REDIRECT_URI =
-  process.env.SHOPIFY_REDIRECT_URI || "http://localhost:3002/api/shopify/callback";
+  (process.env.SHOPIFY_REDIRECT_URI || "").trim() || `${BACKEND_BASE_URL}/api/shopify/callback`;
 
 const SCOPES = [
   "read_products",
@@ -59,6 +80,23 @@ function normalizeShopDomain(input: string): string {
     return `${normalized}.myshopify.com`;
   }
   return normalized;
+}
+
+function isLikelyShopifyAccessToken(value: string): boolean {
+  const candidate = value.trim().toLowerCase();
+  return candidate.startsWith("shpat_") || candidate.startsWith("shpca_");
+}
+
+function assertOAuthSecretInput(value: string): void {
+  if (!isLikelyShopifyAccessToken(value)) {
+    return;
+  }
+
+  throw new HttpError(
+    400,
+    "invalid_client_secret",
+    "api_secret must be Shopify App API Secret Key, not Admin API access token",
+  );
 }
 
 function buildBrandNameFromShop(shopDomain: string): string {
@@ -414,11 +452,39 @@ async function exchangeCodeForAccessToken(params: {
   authCode: string;
 }) {
   const tokenUrl = `https://${params.shopDomain}/admin/oauth/access_token`;
-  const tokenResponse = await axios.post(tokenUrl, {
-    client_id: params.apiKey,
-    client_secret: params.apiSecret,
-    code: params.authCode,
-  });
+  let tokenResponse: any;
+  try {
+    tokenResponse = await axios.post(
+      tokenUrl,
+      {
+        client_id: params.apiKey,
+        client_secret: params.apiSecret,
+        code: params.authCode,
+      },
+      {
+        timeout: SHOPIFY_HTTP_TIMEOUT_MS,
+      },
+    );
+  } catch (error: any) {
+    if (error?.code === "ECONNABORTED") {
+      throw new HttpError(504, "shopify_timeout", "Shopify API timeout during token exchange");
+    }
+
+    if (error?.response?.data) {
+      const details =
+        error.response.data?.error_description ||
+        error.response.data?.error ||
+        error.response.data?.errors ||
+        error.response.statusText;
+      throw new HttpError(
+        400,
+        "token_exchange_failed",
+        `Shopify token exchange failed: ${details || "invalid credentials"}`,
+      );
+    }
+
+    throw error;
+  }
 
   const accessToken = tokenResponse.data?.access_token as string | undefined;
   if (!accessToken) {
@@ -439,6 +505,7 @@ async function fetchPrimaryLocationId(shopDomain: string, accessToken: string): 
         headers: {
           "X-Shopify-Access-Token": accessToken,
         },
+        timeout: SHOPIFY_HTTP_TIMEOUT_MS,
       },
     );
     return locationsResponse.data?.locations?.[0]?.id?.toString() || "";
@@ -507,6 +574,7 @@ async function completeOAuthCallback(params: {
       "OAuth credentials are not configured for this brand",
     );
   }
+  assertOAuthSecretInput(apiSecret);
 
   if (params.hmac && params.query) {
     const isValid = verifyCallbackHmac(params.query, apiSecret, params.hmac);
@@ -600,6 +668,7 @@ router.get("/auth", authenticate, async (req: AuthRequest, res: Response) => {
         "Brand is missing api_key/api_secret for OAuth",
       );
     }
+    assertOAuthSecretInput(apiSecret);
 
     const state = crypto.randomBytes(32).toString("hex");
     await persistOAuthState({
@@ -650,6 +719,7 @@ router.post("/get-install-url", authenticate, async (req: AuthRequest, res: Resp
     if (!rawShop || !apiKey || !apiSecret) {
       throw new HttpError(400, "bad_request", "shop, api_key and api_secret are required");
     }
+    assertOAuthSecretInput(apiSecret);
 
     const shopDomain = normalizeShopDomain(rawShop);
     if (!shopDomain.endsWith(".myshopify.com")) {
@@ -872,22 +942,14 @@ router.post(
         throw new HttpError(400, "missing_shop_domain", "Brand is missing shopify_domain");
       }
 
-      const backendBaseUrl = (process.env.BACKEND_URL || "").trim().replace(/\/+$/, "");
-      if (!backendBaseUrl) {
-        throw new HttpError(
-          400,
-          "missing_backend_url",
-          "BACKEND_URL is required to register Shopify webhooks",
-        );
-      }
-
-      const webhookAddress = `${backendBaseUrl}/api/webhooks/shopify`;
+      const webhookAddress = `${BACKEND_BASE_URL}/api/webhooks/shopify`;
       const adminApiBase = `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}`;
 
       const { data: existingResponse } = await axios.get(`${adminApiBase}/webhooks.json`, {
         headers: {
           "X-Shopify-Access-Token": accessToken,
         },
+        timeout: SHOPIFY_HTTP_TIMEOUT_MS,
       });
 
       const existingWebhooks: any[] = existingResponse?.webhooks || [];
@@ -921,6 +983,7 @@ router.post(
               headers: {
                 "X-Shopify-Access-Token": accessToken,
               },
+              timeout: SHOPIFY_HTTP_TIMEOUT_MS,
             },
           );
           createdTopics.push(topic);

@@ -10,24 +10,28 @@ import {
   Webhook,
   Eye,
   EyeOff,
-  Link,
   Save,
   AlertCircle,
   ExternalLink,
   Settings,
   Package,
   Activity,
+  XCircle,
 } from "lucide-react";
 import api from "../../lib/api";
 import { useToastStore } from "../../store/toastStore";
 
-interface ShopifyConfig {
+interface BrandConfig {
+  id: string;
+  name: string;
   shopify_domain: string;
-  client_id: string;
-  client_secret: string;
-  is_connected: boolean;
-  redirect_uri: string;
-  backend_url: string;
+  shopify_api_key: string;
+  shopify_access_token: string;
+  is_configured: boolean;
+  connected_at?: string;
+  last_sync_at?: string;
+  products_count: number;
+  orders_count: number;
 }
 
 interface WebhookConfig {
@@ -39,31 +43,17 @@ interface WebhookConfig {
   status: "active" | "inactive" | "error";
 }
 
-interface ConnectedBrand {
-  id: string;
-  name: string;
-  shopify_domain: string;
-  connected_at: string;
-  last_sync_at?: string;
-  products_count: number;
-  orders_count: number;
-  is_configured: boolean;
-}
-
 export default function ShopifySettings() {
   const { addToast } = useToastStore();
 
-  // Configuration State
-  const [config, setConfig] = useState<ShopifyConfig>({
+  const [brands, setBrands] = useState<BrandConfig[]>([]);
+  const [selectedBrand, setSelectedBrand] = useState<string | null>(null);
+  const [formData, setFormData] = useState({
     shopify_domain: "",
-    client_id: "",
-    client_secret: "",
-    is_connected: false,
-    redirect_uri: "",
-    backend_url: "",
+    shopify_api_key: "",
+    shopify_access_token: "",
   });
 
-  // Webhooks State
   const [webhooks, setWebhooks] = useState<WebhookConfig[]>([
     {
       topic: "orders/create",
@@ -102,83 +92,89 @@ export default function ShopifySettings() {
     },
   ]);
 
-  // Connected Brands State
-  const [connectedBrands, setConnectedBrands] = useState<ConnectedBrand[]>([]);
-
-  // UI State
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [showSecret, setShowSecret] = useState(false);
+  const [showToken, setShowToken] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"config" | "webhooks" | "brands">("config");
+  const [activeTab, setActiveTab] = useState<"brands" | "webhooks">("brands");
 
   useEffect(() => {
-    loadAll();
+    loadBrands();
   }, []);
 
-  const loadAll = async () => {
+  const loadBrands = async () => {
     try {
       setLoading(true);
-      await Promise.all([loadConfig(), loadBrands()]);
+      const res = await api.get("/api/admin/shopify/brands");
+      if (res.data.brands) {
+        setBrands(res.data.brands);
+      }
     } catch (err: any) {
-      console.error("Error loading:", err);
+      console.error("Error loading brands:", err);
+      addToast("خطأ في تحميل البيانات", "error");
     } finally {
       setLoading(false);
     }
   };
 
-  const loadConfig = async () => {
-    try {
-      const res = await api.get("/api/admin/shopify/config");
-      if (res.data.config) {
-        setConfig(res.data.config);
-      }
-      if (res.data.webhooks) {
-        setWebhooks(res.data.webhooks);
-      }
-    } catch (err: any) {
-      console.error("Error loading config:", err);
-      // Set default redirect URI even if config fails
-      const backendUrl = import.meta.env.VITE_API_URL || window.location.origin;
-      setConfig(prev => ({
-        ...prev,
-        redirect_uri: `${backendUrl}/api/shopify/callback`,
-        backend_url: backendUrl,
-      }));
+  const saveCredentials = async () => {
+    if (!selectedBrand) {
+      addToast("يرجى اختيار علامة تجارية", "error");
+      return;
     }
-  };
 
-  const loadBrands = async () => {
-    try {
-      const res = await api.get("/api/admin/shopify/brands");
-      if (res.data.brands) {
-        setConnectedBrands(res.data.brands.filter((b: any) => b.is_configured));
-      }
-    } catch (err: any) {
-      console.error("Error loading brands:", err);
-    }
-  };
-
-  const saveConfig = async () => {
-    if (!config.shopify_domain || !config.client_id || !config.client_secret) {
+    if (
+      !formData.shopify_domain ||
+      !formData.shopify_api_key ||
+      !formData.shopify_access_token
+    ) {
       addToast("يرجى ملء جميع الحقول", "error");
       return;
     }
 
     try {
       setSaving(true);
-      const res = await api.post("/api/admin/shopify/config", {
-        shopify_domain: config.shopify_domain,
-        client_id: config.client_id,
-        client_secret: config.client_secret,
+      await api.post("/api/admin/shopify/setup-credentials", {
+        brandId: selectedBrand,
+        apiKey: formData.shopify_api_key,
+        accessToken: formData.shopify_access_token,
+        domain: formData.shopify_domain,
       });
 
-      setConfig(res.data.config);
-      addToast("تم حفظ الإعدادات بنجاح ✓", "success");
+      addToast("تم ربط المتجر بنجاح ✓", "success");
+      setFormData({
+        shopify_domain: "",
+        shopify_api_key: "",
+        shopify_access_token: "",
+      });
+      setSelectedBrand(null);
+      await loadBrands();
     } catch (err: any) {
-      addToast(err.response?.data?.error || "خطأ في حفظ الإعدادات", "error");
+      addToast(err.response?.data?.error || "خطأ في الربط", "error");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const disconnectBrand = async (brandId: string) => {
+    if (!confirm("هل أنت متأكد من فصل هذا المتجر؟")) return;
+
+    try {
+      await api.delete(`/api/admin/shopify/brands/${brandId}/disconnect`);
+      addToast("تم فصل المتجر", "success");
+      await loadBrands();
+    } catch (err: any) {
+      addToast("خطأ في فصل المتجر", "error");
+    }
+  };
+
+  const syncBrand = async (brandId: string) => {
+    try {
+      await api.post(`/api/admin/shopify/brands/${brandId}/sync`);
+      addToast("جاري المزامجة...", "success");
+      setTimeout(() => loadBrands(), 2000);
+    } catch (err: any) {
+      addToast("خطأ في المزامجة", "error");
     }
   };
 
@@ -202,19 +198,9 @@ export default function ShopifySettings() {
     try {
       await api.post("/api/admin/shopify/webhooks/setup-all");
       addToast("جاري تفعيل جميع الـ Webhooks...", "success");
-      setTimeout(() => loadConfig(), 2000);
-    } catch (err: any) {
-      addToast("خطأ في تفعيل Webhooks", "error");
-    }
-  };
-
-  const syncBrand = async (brandId: string) => {
-    try {
-      await api.post(`/api/admin/shopify/brands/${brandId}/sync`);
-      addToast("جاري المزامجة...", "success");
       setTimeout(() => loadBrands(), 2000);
     } catch (err: any) {
-      addToast("خطأ في المزامجة", "error");
+      addToast("خطأ في تفعيل Webhooks", "error");
     }
   };
 
@@ -225,6 +211,9 @@ export default function ShopifySettings() {
     setTimeout(() => setCopiedField(null), 1500);
   };
 
+  const connectedBrands = brands.filter((b) => b.is_configured);
+  const unconnectedBrands = brands.filter((b) => !b.is_configured);
+
   return (
     <div className="space-y-6 anim-fade-up">
       {/* Header */}
@@ -234,11 +223,11 @@ export default function ShopifySettings() {
             <ShoppingCart className="w-5 h-5 text-orange-500" />
             <span className="section-label">Shopify Integration</span>
           </div>
-          <h1 className="page-title">إعدادات Shopify</h1>
-          <p className="page-subtitle">ربط متجرك وإدارة المزامجة التلقائية</p>
+          <h1 className="page-title">ربط متاجر Shopify</h1>
+          <p className="page-subtitle">ربط مباشر بدون OAuth - سريع وبسيط</p>
         </div>
         <button
-          onClick={loadAll}
+          onClick={loadBrands}
           className="btn-secondary"
           disabled={loading}
         >
@@ -247,8 +236,8 @@ export default function ShopifySettings() {
         </button>
       </div>
 
-      {/* Connection Status Banner */}
-      {config.is_connected && connectedBrands.length > 0 && (
+      {/* Connection Status */}
+      {connectedBrands.length > 0 && (
         <div className="card border-l-4 border-green-500 bg-gradient-to-r from-green-50 to-transparent p-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -268,7 +257,9 @@ export default function ShopifySettings() {
                   key={brand.id}
                   className="px-3 py-1 bg-white rounded-lg border border-green-200"
                 >
-                  <p className="text-xs font-bold text-slate-700">{brand.name}</p>
+                  <p className="text-xs font-bold text-slate-700">
+                    {brand.name}
+                  </p>
                 </div>
               ))}
             </div>
@@ -279,15 +270,15 @@ export default function ShopifySettings() {
       {/* Tabs */}
       <div className="card p-1 flex gap-1">
         <button
-          onClick={() => setActiveTab("config")}
+          onClick={() => setActiveTab("brands")}
           className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-bold transition-all ${
-            activeTab === "config"
+            activeTab === "brands"
               ? "bg-orange-500 text-white shadow-sm"
               : "text-slate-600 hover:bg-slate-50"
           }`}
         >
-          <Server className="w-4 h-4 inline-block ml-2" />
-          إعدادات الاتصال
+          <Package className="w-4 h-4 inline-block ml-2" />
+          المتاجر ({brands.length})
         </button>
         <button
           onClick={() => setActiveTab("webhooks")}
@@ -300,83 +291,23 @@ export default function ShopifySettings() {
           <Webhook className="w-4 h-4 inline-block ml-2" />
           Webhooks
         </button>
-        <button
-          onClick={() => setActiveTab("brands")}
-          className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-bold transition-all ${
-            activeTab === "brands"
-              ? "bg-orange-500 text-white shadow-sm"
-              : "text-slate-600 hover:bg-slate-50"
-          }`}
-        >
-          <Package className="w-4 h-4 inline-block ml-2" />
-          المتاجر المربوطة
-        </button>
       </div>
 
-      {/* Configuration Tab */}
-      {activeTab === "config" && (
+      {/* Brands Tab */}
+      {activeTab === "brands" && (
         <div className="space-y-6">
-          {/* Redirect URI - Show First and Prominent */}
-          <div className="card border-l-4 border-orange-500 bg-gradient-to-r from-orange-50 to-transparent p-6">
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <Link className="w-5 h-5 text-orange-600" />
-                <h3 className="text-base font-black text-slate-800">
-                  Redirect URI - مهم جداً!
-                </h3>
-              </div>
-              <p className="text-sm text-slate-600">
-                انسخ هذا الرابط وضعه في إعدادات التطبيق في Shopify قبل الربط
-              </p>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={
-                    config.redirect_uri ||
-                    `${config.backend_url || window.location.origin}/api/shopify/callback`
-                  }
-                  readOnly
-                  className="input flex-1 bg-white font-mono text-sm font-bold text-orange-700"
-                />
-                <button
-                  onClick={() =>
-                    copyToClipboard(
-                      config.redirect_uri ||
-                        `${config.backend_url || window.location.origin}/api/shopify/callback`,
-                      "redirect_uri_top"
-                    )
-                  }
-                  className="btn-primary"
-                >
-                  {copiedField === "redirect_uri_top" ? (
-                    <>
-                      <Check className="w-4 h-4" />
-                      تم النسخ
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-4 h-4" />
-                      نسخ
-                    </>
-                  )}
-                </button>
-              </div>
-              <p className="text-xs text-slate-500">
-                📍 المكان: Shopify Admin → Settings → Apps → Develop apps → [Your App] → Configuration → App setup → URLs → Allowed redirection URL(s)
-              </p>
-            </div>
-          </div>
-
           {/* Setup Guide */}
           <div className="card border-l-4 border-blue-500 bg-gradient-to-r from-blue-50 to-transparent p-5">
             <div className="flex gap-3">
               <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
               <div className="text-sm text-slate-700 space-y-3">
-                <p className="font-bold text-slate-800">خطوات الربط:</p>
+                <p className="font-bold text-slate-800">
+                  خطوات الربط السريع:
+                </p>
                 <ol className="list-decimal list-inside space-y-2 text-xs leading-relaxed">
                   <li>
-                    اذهب إلى Shopify Admin → Settings → Apps and sales channels
-                    → Develop apps
+                    اذهب إلى Shopify Admin → Settings → Apps and sales
+                    channels → Develop apps
                   </li>
                   <li>اضغط "Create an app" وأدخل اسم التطبيق</li>
                   <li>
@@ -384,229 +315,241 @@ export default function ShopifySettings() {
                     integration
                   </li>
                   <li>
-                    اختر الصلاحيات المطلوبة: Products (read/write), Inventory
-                    (read/write), Orders (read)
+                    اختر الصلاحيات: Products (read/write), Inventory
+                    (read/write), Orders (read), Locations (read)
                   </li>
                   <li>احفظ واضغط "Install app"</li>
-                  <li>
-                    انسخ Admin API access token و API key وضعهم في الحقول أدناه
-                  </li>
-                  <li>
-                    انسخ Redirect URI من الأعلى وضعه في App setup → URLs →
-                    Allowed redirection URL(s)
-                  </li>
+                  <li>انسخ Admin API access token و API key</li>
+                  <li>الصقهم في النموذج أدناه واضغط "ربط المتجر"</li>
                 </ol>
               </div>
             </div>
           </div>
 
-          {/* Configuration Form */}
-          <div className="card p-6 space-y-6">
-            <div className="flex items-center gap-2 mb-2">
-              <Settings className="w-5 h-5 text-blue-600" />
-              <h2 className="text-lg font-black text-slate-800">
-                بيانات الاتصال
-              </h2>
-            </div>
-
-            <div className="space-y-4">
-              {/* Shopify Domain */}
-              <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">
-                  Shopify Store Domain
-                  <span className="text-red-500 mr-1">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={config.shopify_domain}
-                  onChange={(e) =>
-                    setConfig({ ...config, shopify_domain: e.target.value })
-                  }
-                  placeholder="your-store.myshopify.com"
-                  className="input w-full"
-                  disabled={config.is_connected}
-                />
-                <p className="text-xs text-slate-500 mt-1">
-                  مثال: my-store.myshopify.com
-                </p>
+          {/* Connection Form */}
+          {unconnectedBrands.length > 0 && (
+            <div className="card p-6 space-y-6">
+              <div className="flex items-center gap-2 mb-2">
+                <Settings className="w-5 h-5 text-blue-600" />
+                <h2 className="text-lg font-black text-slate-800">
+                  ربط متجر جديد
+                </h2>
               </div>
 
-              {/* Client ID */}
-              <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">
-                  API Key (Client ID)
-                  <span className="text-red-500 mr-1">*</span>
-                </label>
-                <div className="flex gap-2">
+              <div className="space-y-4">
+                {/* Brand Selection */}
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">
+                    اختر العلامة التجارية
+                    <span className="text-red-500 mr-1">*</span>
+                  </label>
+                  <select
+                    value={selectedBrand || ""}
+                    onChange={(e) => setSelectedBrand(e.target.value)}
+                    className="input w-full"
+                  >
+                    <option value="">-- اختر --</option>
+                    {unconnectedBrands.map((brand) => (
+                      <option key={brand.id} value={brand.id}>
+                        {brand.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Shopify Domain */}
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">
+                    Shopify Store Domain
+                    <span className="text-red-500 mr-1">*</span>
+                  </label>
                   <input
                     type="text"
-                    value={config.client_id}
+                    value={formData.shopify_domain}
                     onChange={(e) =>
-                      setConfig({ ...config, client_id: e.target.value })
+                      setFormData({ ...formData, shopify_domain: e.target.value })
+                    }
+                    placeholder="your-store.myshopify.com"
+                    className="input w-full"
+                  />
+                  <p className="text-xs text-slate-500 mt-1">
+                    مثال: my-store.myshopify.com
+                  </p>
+                </div>
+
+                {/* API Key */}
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">
+                    API Key (Client ID)
+                    <span className="text-red-500 mr-1">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.shopify_api_key}
+                    onChange={(e) =>
+                      setFormData({ ...formData, shopify_api_key: e.target.value })
                     }
                     placeholder="Enter API Key"
-                    className="input flex-1 font-mono text-sm"
-                    disabled={config.is_connected}
+                    className="input w-full font-mono text-sm"
                   />
-                  {config.client_id && (
-                    <button
-                      onClick={() =>
-                        copyToClipboard(config.client_id, "client_id")
+                </div>
+
+                {/* Access Token */}
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">
+                    Admin API Access Token
+                    <span className="text-red-500 mr-1">*</span>
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type={showToken ? "text" : "password"}
+                      value={formData.shopify_access_token}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          shopify_access_token: e.target.value,
+                        })
                       }
+                      placeholder="shpat_xxxxxxxxxxxxx"
+                      className="input flex-1 font-mono text-sm"
+                    />
+                    <button
+                      onClick={() => setShowToken(!showToken)}
                       className="btn-secondary"
                     >
-                      {copiedField === "client_id" ? (
-                        <Check className="w-4 h-4 text-green-600" />
+                      {showToken ? (
+                        <EyeOff className="w-4 h-4" />
                       ) : (
-                        <Copy className="w-4 h-4" />
+                        <Eye className="w-4 h-4" />
                       )}
                     </button>
-                  )}
+                  </div>
                 </div>
               </div>
 
-              {/* Client Secret */}
-              <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">
-                  Admin API Access Token (Client Secret)
-                  <span className="text-red-500 mr-1">*</span>
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type={showSecret ? "text" : "password"}
-                    value={config.client_secret}
-                    onChange={(e) =>
-                      setConfig({ ...config, client_secret: e.target.value })
-                    }
-                    placeholder="shpat_xxxxxxxxxxxxx"
-                    className="input flex-1 font-mono text-sm"
-                    disabled={config.is_connected}
-                  />
-                  <button
-                    onClick={() => setShowSecret(!showSecret)}
-                    className="btn-secondary"
-                  >
-                    {showSecret ? (
-                      <EyeOff className="w-4 h-4" />
-                    ) : (
-                      <Eye className="w-4 h-4" />
-                    )}
-                  </button>
-                  {config.client_secret && (
-                    <button
-                      onClick={() =>
-                        copyToClipboard(config.client_secret, "client_secret")
-                      }
-                      className="btn-secondary"
-                    >
-                      {copiedField === "client_secret" ? (
-                        <Check className="w-4 h-4 text-green-600" />
-                      ) : (
-                        <Copy className="w-4 h-4" />
-                      )}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Redirect URI - Always Show */}
-              <div className="pt-4 border-t border-slate-200">
-                <label className="block text-sm font-bold text-slate-700 mb-2">
-                  Redirect URI
-                  <span className="text-xs font-normal text-orange-600 mr-2">
-                    (انسخه وضعه في إعدادات التطبيق في Shopify)
-                  </span>
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={
-                      config.redirect_uri ||
-                      `${config.backend_url || window.location.origin}/api/shopify/callback`
-                    }
-                    readOnly
-                    className="input flex-1 bg-slate-50 font-mono text-xs"
-                  />
-                  <button
-                    onClick={() =>
-                      copyToClipboard(
-                        config.redirect_uri ||
-                          `${config.backend_url || window.location.origin}/api/shopify/callback`,
-                        "redirect_uri"
-                      )
-                    }
-                    className="btn-secondary"
-                  >
-                    {copiedField === "redirect_uri" ? (
-                      <Check className="w-4 h-4 text-green-600" />
-                    ) : (
-                      <Copy className="w-4 h-4" />
-                    )}
-                  </button>
-                </div>
-                <p className="text-xs text-slate-500 mt-2">
-                  ضع هذا الرابط في Shopify App Setup → URLs → Allowed
-                  redirection URL(s)
-                </p>
-              </div>
-
-              {/* Webhook URL */}
-              <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">
-                  Webhook URL
-                  <span className="text-xs font-normal text-slate-500 mr-2">
-                    (للـ Webhooks)
-                  </span>
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={`${config.backend_url || window.location.origin}/api/webhooks/shopify`}
-                    readOnly
-                    className="input flex-1 bg-slate-50 font-mono text-xs"
-                  />
-                  <button
-                    onClick={() =>
-                      copyToClipboard(
-                        `${config.backend_url || window.location.origin}/api/webhooks/shopify`,
-                        "webhook_url"
-                      )
-                    }
-                    className="btn-secondary"
-                  >
-                    {copiedField === "webhook_url" ? (
-                      <Check className="w-4 h-4 text-green-600" />
-                    ) : (
-                      <Copy className="w-4 h-4" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Action Button */}
-            <div className="flex gap-3 pt-4 border-t border-slate-200">
+              {/* Save Button */}
               <button
-                onClick={saveConfig}
-                disabled={saving || config.is_connected}
-                className="btn-primary flex-1"
+                onClick={saveCredentials}
+                disabled={saving || !selectedBrand}
+                className="btn-primary w-full"
               >
                 <Save className="w-4 h-4" />
-                {saving ? "جاري الحفظ..." : "حفظ الإعدادات"}
+                {saving ? "جاري الربط..." : "ربط المتجر"}
               </button>
-              {config.is_connected && (
-                <a
-                  href={`https://${config.shopify_domain}/admin/settings/apps/development`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn-secondary flex-1 flex items-center justify-center gap-2"
-                >
-                  <ExternalLink className="w-4 h-4" />
-                  فتح Shopify Admin
-                </a>
-              )}
             </div>
-          </div>
+          )}
+
+          {/* Connected Brands */}
+          {connectedBrands.length > 0 && (
+            <div className="space-y-4">
+              <h3 className="text-base font-black text-slate-800">
+                المتاجر المربوطة ({connectedBrands.length})
+              </h3>
+              <div className="grid gap-4">
+                {connectedBrands.map((brand) => (
+                  <div
+                    key={brand.id}
+                    className="card p-5 border border-slate-200 hover:shadow-lg transition-shadow"
+                  >
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="flex-1">
+                        <h3 className="text-base font-black text-slate-800 mb-1">
+                          {brand.name}
+                        </h3>
+                        <p className="text-xs text-slate-500 font-mono mb-2">
+                          {brand.shopify_domain}
+                        </p>
+                        {brand.connected_at && (
+                          <p className="text-[10px] text-slate-400">
+                            تم الربط:{" "}
+                            {new Date(brand.connected_at).toLocaleString(
+                              "ar-EG"
+                            )}
+                          </p>
+                        )}
+                      </div>
+                      <span className="badge badge-green">✓ مربوط</span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3 mb-4">
+                      <div className="px-3 py-2 bg-slate-50 rounded-lg">
+                        <p className="text-[10px] text-slate-500 font-medium">
+                          المنتجات
+                        </p>
+                        <p className="text-sm font-black text-slate-800">
+                          {brand.products_count}
+                        </p>
+                      </div>
+                      <div className="px-3 py-2 bg-slate-50 rounded-lg">
+                        <p className="text-[10px] text-slate-500 font-medium">
+                          الأوردرات
+                        </p>
+                        <p className="text-sm font-black text-slate-800">
+                          {brand.orders_count}
+                        </p>
+                      </div>
+                      <div className="px-3 py-2 bg-slate-50 rounded-lg">
+                        <p className="text-[10px] text-slate-500 font-medium">
+                          آخر مزامجة
+                        </p>
+                        <p className="text-[10px] font-black text-slate-800">
+                          {brand.last_sync_at
+                            ? new Date(brand.last_sync_at).toLocaleString(
+                                "ar-EG",
+                                {
+                                  month: "short",
+                                  day: "numeric",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                }
+                              )
+                            : "—"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => syncBrand(brand.id)}
+                        className="flex-1 btn-secondary text-sm"
+                      >
+                        <Activity className="w-3.5 h-3.5" />
+                        مزامجة
+                      </button>
+                      <button
+                        onClick={() => disconnectBrand(brand.id)}
+                        className="flex-1 btn-secondary text-sm text-red-600 hover:bg-red-50"
+                      >
+                        <XCircle className="w-3.5 h-3.5" />
+                        فصل
+                      </button>
+                      <a
+                        href={`https://${brand.shopify_domain}/admin`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 btn-secondary text-sm flex items-center justify-center gap-2"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        فتح
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {brands.length === 0 && !loading && (
+            <div className="card flex flex-col items-center py-12">
+              <Package className="w-12 h-12 text-slate-200 mb-3" />
+              <p className="text-sm font-bold text-slate-400">
+                لا توجد علامات تجارية
+              </p>
+              <p className="text-xs text-slate-400 mt-1">
+                قم بإضافة علامة تجارية أولاً من إعدادات النظام
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -623,7 +566,7 @@ export default function ShopifySettings() {
               </div>
               <button
                 onClick={setupAllWebhooks}
-                disabled={!config.is_connected}
+                disabled={connectedBrands.length === 0}
                 className="btn-secondary text-sm"
               >
                 <Zap className="w-4 h-4" />
@@ -681,7 +624,7 @@ export default function ShopifySettings() {
                       onChange={(e) =>
                         toggleWebhook(wh.topic, e.target.checked)
                       }
-                      disabled={!config.is_connected}
+                      disabled={connectedBrands.length === 0}
                       className="w-5 h-5 rounded"
                     />
                   </label>
@@ -689,95 +632,12 @@ export default function ShopifySettings() {
               ))}
             </div>
 
-            {!config.is_connected && (
+            {connectedBrands.length === 0 && (
               <div className="text-center py-8 text-sm text-slate-500">
-                يجب حفظ إعدادات الاتصال أولاً لتفعيل Webhooks
+                يجب ربط متجر أولاً لتفعيل Webhooks
               </div>
             )}
           </div>
-        </div>
-      )}
-
-      {/* Connected Brands Tab */}
-      {activeTab === "brands" && (
-        <div className="space-y-4">
-          {connectedBrands.length === 0 ? (
-            <div className="card flex flex-col items-center py-12">
-              <Package className="w-12 h-12 text-slate-200 mb-3" />
-              <p className="text-sm font-bold text-slate-400">
-                لا توجد متاجر مربوطة
-              </p>
-              <p className="text-xs text-slate-400 mt-1">
-                قم بربط متجر من إعدادات العلامات التجارية
-              </p>
-            </div>
-          ) : (
-            <div className="grid gap-4">
-              {connectedBrands.map((brand) => (
-                <div
-                  key={brand.id}
-                  className="card p-5 border border-slate-200 hover:shadow-lg transition-shadow"
-                >
-                  <div className="flex items-start justify-between mb-4">
-                    <div>
-                      <h3 className="text-base font-black text-slate-800 mb-1">
-                        {brand.name}
-                      </h3>
-                      <p className="text-xs text-slate-500 font-mono">
-                        {brand.shopify_domain}
-                      </p>
-                    </div>
-                    <span className="badge badge-green">✓ مربوط</span>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-3 mb-4">
-                    <div className="px-3 py-2 bg-slate-50 rounded-lg">
-                      <p className="text-[10px] text-slate-500 font-medium">
-                        المنتجات
-                      </p>
-                      <p className="text-sm font-black text-slate-800">
-                        {brand.products_count}
-                      </p>
-                    </div>
-                    <div className="px-3 py-2 bg-slate-50 rounded-lg">
-                      <p className="text-[10px] text-slate-500 font-medium">
-                        الأوردرات
-                      </p>
-                      <p className="text-sm font-black text-slate-800">
-                        {brand.orders_count}
-                      </p>
-                    </div>
-                    <div className="px-3 py-2 bg-slate-50 rounded-lg">
-                      <p className="text-[10px] text-slate-500 font-medium">
-                        آخر مزامجة
-                      </p>
-                      <p className="text-[10px] font-black text-slate-800">
-                        {brand.last_sync_at
-                          ? new Date(brand.last_sync_at).toLocaleString(
-                              "ar-EG",
-                              {
-                                month: "short",
-                                day: "numeric",
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              }
-                            )
-                          : "—"}
-                      </p>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => syncBrand(brand.id)}
-                    className="btn-secondary w-full text-sm"
-                  >
-                    <Activity className="w-3.5 h-3.5" />
-                    مزامجة الآن
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
     </div>

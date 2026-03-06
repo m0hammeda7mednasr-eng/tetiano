@@ -10,6 +10,18 @@ const router = Router();
 // All admin routes require authentication + admin role
 router.use(authenticate);
 
+function resolveBackendBaseUrl(): string {
+  const explicit = (process.env.BACKEND_URL || process.env.API_URL || "").trim();
+  if (explicit) {
+    return explicit.replace(/\/+$/, "");
+  }
+
+  const port = (process.env.PORT || "3002").trim();
+  return `http://localhost:${port}`;
+}
+
+const BACKEND_BASE_URL = resolveBackendBaseUrl();
+
 async function getUserSnapshot(userId: string) {
   const { data: profile } = await supabase
     .from("user_profiles")
@@ -877,6 +889,7 @@ router.post(
           shopify_domain: domain,
           shopify_location_id: locationId,
           is_configured: true,
+          connected_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         })
         .eq("id", brandId);
@@ -896,6 +909,47 @@ router.post(
       });
     } catch (err: any) {
       logger.error("Admin: credentials error", { error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+/** DELETE /api/admin/shopify/brands/:id/disconnect - disconnect brand from Shopify */
+router.delete(
+  "/shopify/brands/:id/disconnect",
+  requireRole("admin"),
+  async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+
+    try {
+      const beforeSnapshot = await getBrandSnapshot(id);
+      const { error } = await supabase
+        .from("brands")
+        .update({
+          shopify_api_key: null,
+          shopify_access_token: null,
+          is_configured: false,
+          connected_at: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", id);
+
+      if (error) throw error;
+
+      logger.info("Admin: brand disconnected", { brandId: id });
+      res.json({ success: true, message: "تم فصل المتجر" });
+      
+      const afterSnapshot = await getBrandSnapshot(id);
+      await logAuditEvent({
+        userId: req.user?.id,
+        action: "admin.shopify.disconnect_brand",
+        tableName: "brands",
+        recordId: id,
+        before: beforeSnapshot,
+        after: afterSnapshot,
+      });
+    } catch (err: any) {
+      logger.error("Admin: disconnect error", { error: err.message });
       res.status(500).json({ error: err.message });
     }
   },
@@ -1009,7 +1063,7 @@ router.get(
   requireRole("admin"),
   async (req: AuthRequest, res: Response) => {
     try {
-      const backendUrl = process.env.BACKEND_URL || process.env.API_URL || "http://localhost:3002";
+      const backendUrl = BACKEND_BASE_URL;
       
       // Get config from environment or database
       const config = {
@@ -1094,7 +1148,7 @@ router.post(
     }
 
     try {
-      const backendUrl = process.env.BACKEND_URL || process.env.API_URL || "http://localhost:3002";
+      const backendUrl = BACKEND_BASE_URL;
       
       // In production, save to secure storage or environment
       // For now, we'll return the config with redirect URI
@@ -1144,7 +1198,7 @@ router.get(
     try {
       const shopifyDomain = process.env.SHOPIFY_DOMAIN;
       const clientId = process.env.SHOPIFY_CLIENT_ID;
-      const redirectUri = `${process.env.BACKEND_URL || "http://localhost:3000"}/api/shopify/callback`;
+      const redirectUri = `${BACKEND_BASE_URL}/api/shopify/callback`;
 
       if (!shopifyDomain || !clientId) {
         return res.status(400).json({ error: "الإعدادات غير مكتملة" });
