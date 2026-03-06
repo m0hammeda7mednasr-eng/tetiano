@@ -5,10 +5,40 @@ import { logger } from '../utils/logger';
 
 const router = Router();
 
+function isSchemaCompatibilityError(error: any): boolean {
+  const text = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase();
+  return (
+    text.includes('column') ||
+    text.includes('relation') ||
+    text.includes('does not exist') ||
+    text.includes('schema cache') ||
+    text.includes('unknown relationship')
+  );
+}
+
+async function canAccessTeam(userId: string, teamId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('team_members')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('team_id', teamId)
+    .maybeSingle();
+
+  if (error) {
+    if (isSchemaCompatibilityError(error)) {
+      return false;
+    }
+    throw error;
+  }
+
+  return Boolean(data?.id);
+}
+
 // Get user's daily reports
 router.get('/', authenticate, async (req: AuthRequest, res) => {
   try {
     const { start_date, end_date, team_id } = req.query;
+    const requestedTeamId = team_id ? String(team_id) : '';
 
     let query = supabase
       .from('daily_reports')
@@ -20,8 +50,14 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
       )
       .order('report_date', { ascending: false });
 
-    if (team_id) {
-      query = query.eq('team_id', team_id);
+    if (requestedTeamId) {
+      if (req.user?.role !== 'admin') {
+        const allowed = await canAccessTeam(req.user!.id, requestedTeamId);
+        if (!allowed) {
+          return res.status(403).json({ error: 'Access denied for requested team' });
+        }
+      }
+      query = query.eq('team_id', requestedTeamId);
     } else {
       query = query.eq('user_id', req.user!.id);
     }
@@ -34,7 +70,29 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
       query = query.lte('report_date', end_date);
     }
 
-    const { data, error } = await query;
+    let { data, error } = await query;
+
+    if (error && requestedTeamId && isSchemaCompatibilityError(error)) {
+      return res.status(503).json({
+        error: 'Team-based reports are unavailable until team_id migration is applied.',
+      });
+    }
+
+    if (error && isSchemaCompatibilityError(error)) {
+      const fallback = await supabase
+        .from('daily_reports')
+        .select(
+          `
+          *,
+          user_profiles(full_name)
+        `
+        )
+        .eq('user_id', req.user!.id)
+        .order('report_date', { ascending: false });
+
+      data = fallback.data;
+      error = fallback.error;
+    }
 
     if (error) {
       throw error;
@@ -58,38 +116,52 @@ router.post("/", authenticate, requirePermission("can_submit_reports"), async (r
       });
     }
 
-    // Get user's team
-    const { data: teamMember } = await supabase
+    // Get user's team (if schema still uses team-based reports)
+    const teamMemberResult = await supabase
       .from('team_members')
       .select('team_id')
       .eq('user_id', req.user!.id)
-      .single();
+      .maybeSingle();
 
-    if (!teamMember) {
-      return res.status(400).json({ error: 'User not assigned to a team' });
+    if (teamMemberResult.error && !isSchemaCompatibilityError(teamMemberResult.error)) {
+      throw teamMemberResult.error;
     }
 
     const reportDate = report_date || new Date().toISOString().split('T')[0];
+    const reportPayload: Record<string, unknown> = {
+      user_id: req.user!.id,
+      report_date: reportDate,
+      done_today,
+      blockers: blockers || null,
+      plan_tomorrow,
+    };
 
-    const { data, error } = await supabase
+    const teamId = teamMemberResult.data?.team_id;
+    if (teamId) {
+      reportPayload.team_id = teamId;
+    }
+
+    let { data, error } = await supabase
       .from('daily_reports')
-      .upsert(
-        {
-          user_id: req.user!.id,
-          team_id: teamMember.team_id,
-          report_date: reportDate,
-          done_today,
-          blockers: blockers || null,
-          plan_tomorrow,
-        },
-        { onConflict: 'user_id,report_date' }
-      )
+      .upsert(reportPayload, { onConflict: 'user_id,report_date' })
       .select()
       .single();
 
-    if (error) {
-      throw error;
+    if (error && isSchemaCompatibilityError(error)) {
+      const fallbackPayload = { ...reportPayload };
+      delete fallbackPayload.team_id;
+
+      const fallback = await supabase
+        .from('daily_reports')
+        .upsert(fallbackPayload, { onConflict: 'user_id,report_date' })
+        .select()
+        .single();
+
+      data = fallback.data;
+      error = fallback.error;
     }
+
+    if (error) throw error;
 
     res.json({ report: data, message: 'Report submitted successfully' });
   } catch (error: any) {
@@ -131,8 +203,15 @@ router.get("/team/:teamId/summary", authenticate, requirePermission("can_view_re
     const { date } = req.query;
     const reportDate = (date as string) || new Date().toISOString().split('T')[0];
 
+    if (req.user?.role !== 'admin') {
+      const allowed = await canAccessTeam(req.user!.id, teamId);
+      if (!allowed) {
+        return res.status(403).json({ error: 'Access denied for requested team' });
+      }
+    }
+
     // Get all team members
-    const { data: members } = await supabase
+    const membersResult = await supabase
       .from('team_members')
       .select(
         `
@@ -142,12 +221,28 @@ router.get("/team/:teamId/summary", authenticate, requirePermission("can_view_re
       )
       .eq('team_id', teamId);
 
+    if (membersResult.error) {
+      throw membersResult.error;
+    }
+    const members = membersResult.data || [];
+
     // Get reports for the date
-    const { data: reports } = await supabase
+    const reportsResult = await supabase
       .from('daily_reports')
       .select('*')
       .eq('team_id', teamId)
       .eq('report_date', reportDate);
+
+    if (reportsResult.error) {
+      if (isSchemaCompatibilityError(reportsResult.error)) {
+        return res.status(503).json({
+          error: 'Team summary is unavailable until team_id migration is applied.',
+        });
+      }
+      throw reportsResult.error;
+    }
+
+    const reports = reportsResult.data || [];
 
     const submittedUserIds = new Set(reports?.map((r) => r.user_id) || []);
 

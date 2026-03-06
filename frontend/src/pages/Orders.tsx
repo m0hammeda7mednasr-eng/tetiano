@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import api from '../lib/api';
-import { supabase } from '../lib/supabase';
 import {
   ShoppingBag, User, Truck,
   RefreshCw, Clock, Package, AlertCircle, ChevronDown
@@ -35,11 +34,22 @@ export default function Orders() {
   const [expandedId, setExpanded] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase.from('brands').select('id, name').eq('is_active', true)
-      .then(({ data }) => {
-        setBrands(data || []);
-        if (data?.[0]) setBrandId(data[0].id);
-      });
+    const fetchBrands = async () => {
+      try {
+        const { data } = await api.get('/api/shopify/brands');
+        const mapped = (data?.brands || []).map((brand: any) => ({
+          id: brand.id,
+          name: brand.name,
+        }));
+        setBrands(mapped);
+        if (mapped?.[0]) setBrandId(mapped[0].id);
+      } catch {
+        setBrands([]);
+        setBrandId(null);
+      }
+    };
+
+    fetchBrands();
   }, []);
 
   useEffect(() => { if (brandId) fetchOrders(); }, [brandId]);

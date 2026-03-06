@@ -178,7 +178,7 @@ router.get("/:brandId/export/orders", authenticate, requirePermission("can_view_
 
     const csv = buildCsv(headers, (orders || []) as Array<Record<string, unknown>>);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename=\"orders-${brandId}.csv\"`);
+    res.setHeader('Content-Disposition', `attachment; filename="orders-${brandId}.csv"`);
     res.send(csv);
   } catch (error: any) {
     if (error instanceof BrandAccessError) {
@@ -230,7 +230,7 @@ router.get("/:brandId/export/customers", authenticate, requirePermission("can_vi
 
     const csv = buildCsv(headers, (customers || []) as Array<Record<string, unknown>>);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename=\"customers-${brandId}.csv\"`);
+    res.setHeader('Content-Disposition', `attachment; filename="customers-${brandId}.csv"`);
     res.send(csv);
   } catch (error: any) {
     if (error instanceof BrandAccessError) {

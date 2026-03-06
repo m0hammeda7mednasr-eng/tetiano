@@ -115,6 +115,84 @@ async function getBrandSnapshot(brandId: string) {
   return data;
 }
 
+async function countPendingOrderNotifications(): Promise<number> {
+  const isReadQuery = await supabase
+    .from("notifications")
+    .select("id", { count: "exact", head: true })
+    .eq("type", "order_pending")
+    .eq("is_read", false);
+
+  if (!isReadQuery.error) {
+    return isReadQuery.count || 0;
+  }
+
+  if (!isSchemaCompatibilityError(isReadQuery.error)) {
+    throw isReadQuery.error;
+  }
+
+  const readQuery = await supabase
+    .from("notifications")
+    .select("id", { count: "exact", head: true })
+    .eq("type", "order_pending")
+    .eq("read", false);
+
+  if (readQuery.error) {
+    throw readQuery.error;
+  }
+
+  return readQuery.count || 0;
+}
+
+async function getTeamReportSummaryFallback(targetDate: string, reports: any[]) {
+  const teamsResult = await supabase.from("teams").select("id, name").eq("is_active", true);
+
+  if (teamsResult.error) {
+    if (isSchemaCompatibilityError(teamsResult.error)) {
+      return [];
+    }
+    throw teamsResult.error;
+  }
+
+  const membershipsResult = await supabase.from("team_members").select("team_id, user_id");
+  if (membershipsResult.error) {
+    if (isSchemaCompatibilityError(membershipsResult.error)) {
+      return [];
+    }
+    throw membershipsResult.error;
+  }
+
+  const teams = teamsResult.data || [];
+  const memberships = membershipsResult.data || [];
+  const reportsByTeam = (reports || []).reduce<Record<string, any[]>>((acc, report) => {
+    const key = String(report.team_id || "");
+    if (!key) return acc;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(report);
+    return acc;
+  }, {});
+
+  return teams.map((team: any) => {
+    const members = memberships.filter((m: any) => m.team_id === team.id);
+    const teamReports = reportsByTeam[team.id] || [];
+
+    return {
+      team_id: team.id,
+      team_name: team.name,
+      member_count: new Set(members.map((m: any) => m.user_id)).size,
+      total_reports: teamReports.length,
+      reports_today: teamReports.filter((r: any) => {
+        const createdAt = String(r.created_at || "");
+        return createdAt.startsWith(targetDate);
+      }).length,
+      last_report_at: teamReports
+        .map((r: any) => r.created_at)
+        .filter(Boolean)
+        .sort()
+        .reverse()[0] || null,
+    };
+  });
+}
+
 // ══════════════════════════════════════════════
 //  USERS MANAGEMENT
 // ══════════════════════════════════════════════
@@ -776,17 +854,21 @@ router.get(
       const missing = allUsers?.filter((u) => !submittedIds.has(u.id)) || [];
 
       // Summary stats
-      const { data: summary, error: summaryError } = await supabase
-        .from("team_report_summary")
-        .select("*");
-      if (summaryError && !isSchemaCompatibilityError(summaryError)) {
-        throw summaryError;
+      let summary: any[] = [];
+      const summaryResult = await supabase.from("team_report_summary").select("*");
+
+      if (!summaryResult.error) {
+        summary = summaryResult.data || [];
+      } else if (isSchemaCompatibilityError(summaryResult.error)) {
+        summary = await getTeamReportSummaryFallback(targetDate, reports);
+      } else {
+        throw summaryResult.error;
       }
 
       res.json({
         reports,
         missing,
-        summary: summaryError ? [] : summary,
+        summary,
         date: targetDate,
         team_filter_applied: teamFilterApplied,
       });
@@ -809,7 +891,7 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const today = new Date().toISOString().slice(0, 10);
-      const [usersRes, teamsRes, reportsRes, brandsRes, pendingOrdersRes] = await Promise.all([
+      const [usersRes, teamsRes, reportsRes, brandsRes, pendingOrders] = await Promise.all([
         supabase.from("user_profiles").select("id, role, is_active"),
         supabase.from("teams").select("id").eq("is_active", true),
         supabase
@@ -817,11 +899,7 @@ router.get(
           .select("id, user_id")
           .gte("created_at", `${today}T00:00:00`),
         supabase.from("brands").select("*").not("shopify_domain", "is", null),
-        supabase
-          .from("notifications")
-          .select("id", { count: "exact", head: true })
-          .eq("type", "order_pending")
-          .eq("is_read", false),
+        countPendingOrderNotifications(),
       ]);
 
       const users = usersRes.data || [];
@@ -844,7 +922,7 @@ router.get(
         unique_reporters: new Set(repToday.map((r) => r.user_id)).size,
         total_brands: brands.length,
         shopify_connected: connectedBrands,
-        pending_orders: pendingOrdersRes.count || 0,
+        pending_orders: pendingOrders || 0,
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -887,11 +965,7 @@ router.get(
       const isSyncing = (brands || []).some((brand: any) => brand.sync_status === "syncing");
 
       // Count pending orders (from notifications table)
-      const { count: pendingCount } = await supabase
-        .from("notifications")
-        .select("id", { count: "exact", head: true })
-        .eq("type", "order_pending")
-        .eq("is_read", false);
+      const pendingCount = await countPendingOrderNotifications();
 
       res.json({
         total_brands: totalBrands,

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../lib/api';
-import { supabase } from '../lib/supabase';
 import {
   Activity,
   AlertTriangle,
@@ -147,18 +146,8 @@ export default function Settings() {
       dbStatus = 'online';
     } catch {
       backendStatus = 'offline';
-      try {
-        const { data, error } = await supabase
-          .from('brands')
-          .select('id, name, shopify_domain, shopify_scopes, connected_at, last_sync_at, is_active, shopify_location_id')
-          .order('name');
-        if (error) throw error;
-        nextBrands = (data || []) as Brand[];
-        dbStatus = 'online';
-      } catch {
-        dbStatus = 'offline';
-        nextBrands = [];
-      }
+      dbStatus = 'offline';
+      nextBrands = [];
     }
 
     setBrands(nextBrands);

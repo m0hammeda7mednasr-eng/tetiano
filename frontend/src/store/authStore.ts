@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { User } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 
+const TEAM_PERMISSIONS_ENABLED = import.meta.env.VITE_TEAM_PERMISSIONS_ENABLED === "true";
+
 export interface UserProfile {
   id: string;
   full_name: string;
@@ -189,10 +191,15 @@ async function fetchAndSetProfile(
 
     const safeMemberships = membershipError ? [] : memberships || [];
 
-    const profilePermissions = null; // Removed: toPermissionMap(profile?.permissions);
+    const profilePermissions = toPermissionMap(profile?.permissions);
     let teamPermissions: Record<string, boolean> | null = null;
 
-    if (normalizedRole !== "admin" && !profilePermissions && safeMemberships?.[0]?.team_id) {
+    if (
+      TEAM_PERMISSIONS_ENABLED &&
+      normalizedRole !== "admin" &&
+      !profilePermissions &&
+      safeMemberships?.[0]?.team_id
+    ) {
       const { data, error: teamPermissionsError } = await supabase
         .from("team_permissions")
         .select("*")

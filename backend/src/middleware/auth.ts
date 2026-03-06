@@ -2,6 +2,8 @@ import { Request, Response, NextFunction } from "express";
 import { supabase } from "../config/supabase";
 import { logger } from "../utils/logger";
 
+const TEAM_PERMISSIONS_ENABLED = process.env.TEAM_PERMISSIONS_ENABLED === "true";
+
 export interface AuthRequest extends Request {
   user?: {
     id: string;
@@ -142,7 +144,7 @@ export const authenticate = async (
     const hasProfilePermissions = Object.keys(profilePermissions).length > 0;
 
     let teamPermissions: Record<string, boolean> | null = null;
-    if (normalizedRole !== "admin" && !hasProfilePermissions) {
+    if (TEAM_PERMISSIONS_ENABLED && normalizedRole !== "admin" && !hasProfilePermissions) {
       const { data: membership, error: membershipError } = await supabase
         .from("team_members")
         .select("team_id, role")

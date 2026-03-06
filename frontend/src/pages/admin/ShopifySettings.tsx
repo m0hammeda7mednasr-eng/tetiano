@@ -6,7 +6,6 @@ import {
   Copy,
   Check,
   CheckCircle,
-  Server,
   Webhook,
   Eye,
   EyeOff,
