@@ -1217,7 +1217,7 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
 
     // Create OAuth state
     const state = crypto.randomBytes(32).toString("hex");
-    const stateInsert = await supabase.from("shopify_oauth_states").insert({
+    let stateInsert = await supabase.from("shopify_oauth_states").insert({
       state,
       shop: shopDomain,
       brand_id: storeId,
@@ -1226,14 +1226,42 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
       api_secret: apiSecret,
       expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
     });
-    
+
+    if (stateInsert.error && isSchemaCompatibilityError(stateInsert.error)) {
+      stateInsert = await supabase.from("shopify_oauth_states").insert({
+        state,
+        shop: shopDomain,
+        user_id: req.user?.id || null,
+        api_key: apiKey,
+        api_secret: apiSecret,
+      });
+    }
+
+    if (stateInsert.error && isSchemaCompatibilityError(stateInsert.error)) {
+      stateInsert = await supabase.from("shopify_oauth_states").insert({
+        state,
+        shop: shopDomain,
+      });
+    }
+
     if (stateInsert.error) {
-      logger.error("Failed to create OAuth state", { error: stateInsert.error });
-      throw new Error("Failed to create OAuth state");
+      logger.error("Failed to create OAuth state", {
+        message: stateInsert.error.message,
+        code: stateInsert.error.code,
+        details: stateInsert.error.details,
+      });
+
+      if (isSchemaCompatibilityError(stateInsert.error)) {
+        return res.status(503).json({
+          error: "Database schema is missing required Shopify OAuth fields/tables. Run latest migrations.",
+        });
+      }
+
+      throw stateInsert.error;
     }
 
     // Update shopify_connections
-    await supabase.from("shopify_connections").upsert(
+    const connectionUpsert = await supabase.from("shopify_connections").upsert(
       {
         store_id: storeId,
         shop_domain: shopDomain,
@@ -1244,6 +1272,9 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
       },
       { onConflict: "store_id" },
     );
+    if (connectionUpsert.error && !isSchemaCompatibilityError(connectionUpsert.error)) {
+      throw connectionUpsert.error;
+    }
 
     // Build install URL
     const redirectUri = `${resolveBackendUrl(req)}/api/shopify/callback`;
@@ -1256,8 +1287,22 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
 
     return res.json({ install_url: installUrl, state, shop: shopDomain });
   } catch (error: any) {
-    logger.error("App shopify connect failed", { error: error?.message, storeId, shopDomain });
-    return res.status(500).json({ error: "Failed to start Shopify OAuth flow" });
+    logger.error("App shopify connect failed", {
+      error: error?.message,
+      code: error?.code,
+      details: error?.details,
+      hint: error?.hint,
+      storeId,
+      shopDomain,
+    });
+
+    if (isSchemaCompatibilityError(error)) {
+      return res.status(503).json({
+        error: "Database schema is not compatible with Shopify OAuth flow. Apply latest migrations and retry.",
+      });
+    }
+
+    return res.status(500).json({ error: error?.message || "Failed to start Shopify OAuth flow" });
   }
 });
 
