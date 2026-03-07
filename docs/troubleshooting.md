@@ -1,514 +1,496 @@
-# Troubleshooting Guide
+# 🔧 دليل استكشاف الأخطاء وإصلاحها
 
-## Common Issues and Solutions
+## 🚨 الأخطاء الشائعة
 
-### 1. Authentication Issues
+### 1. خطأ 500: Internal Server Error
 
-#### Problem: "Invalid or expired token"
-**Symptoms:**
-- 401 errors on API calls
-- User logged out unexpectedly
+#### الأعراض
 
-**Solutions:**
-1. Check if Supabase session is valid:
-   ```javascript
-   const { data: { session } } = await supabase.auth.getSession();
-   console.log(session);
-   ```
-
-2. Verify environment variables:
-   - Frontend: `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`
-   - Backend: `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`
-
-3. Check token expiration (default 1 hour)
-4. Implement token refresh in frontend
-
-#### Problem: "User not assigned to any team"
-**Symptoms:**
-- 403 errors after login
-- Cannot access any resources
-
-**Solutions:**
-1. Check `team_members` table:
-   ```sql
-   SELECT * FROM team_members WHERE user_id = 'user-uuid';
-   ```
-
-2. Assign user to team:
-   ```sql
-   INSERT INTO team_members (user_id, team_id, role)
-   VALUES ('user-uuid', 'team-uuid', 'admin');
-   ```
-
-### 2. Webhook Issues
-
-#### Problem: Webhooks not being received
-**Symptoms:**
-- Inventory not syncing
-- No webhook events in database
-
-**Solutions:**
-1. Check webhook configuration in Shopify:
-   - Settings → Notifications → Webhooks
-   - Verify URL is correct
-   - Check webhook status (should be "Enabled")
-
-2. Test webhook endpoint:
-   ```bash
-   curl -X POST https://your-backend.com/health
-   ```
-
-3. Check Shopify webhook logs:
-   - View delivery attempts
-   - Check for errors
-
-4. Verify backend is accessible:
-   - Not behind firewall
-   - HTTPS enabled
-   - Correct port exposed
-
-#### Problem: "Invalid webhook signature"
-**Symptoms:**
-- 401 errors in webhook logs
-- Webhooks rejected
-
-**Solutions:**
-1. Verify `SHOPIFY_WEBHOOK_SECRET` matches Shopify:
-   - Get from Shopify webhook settings
-   - Update in backend `.env`
-
-2. Check HMAC verification code:
-   ```typescript
-   const hmac = req.headers['x-shopify-hmac-sha256'];
-   const hash = crypto
-     .createHmac('sha256', SHOPIFY_WEBHOOK_SECRET)
-     .update(rawBody, 'utf8')
-     .digest('base64');
-   ```
-
-3. Ensure raw body is used for verification
-
-#### Problem: Duplicate webhook processing
-**Symptoms:**
-- Stock movements recorded twice
-- Inventory incorrect
-
-**Solutions:**
-1. Check idempotency implementation:
-   ```sql
-   SELECT * FROM shopify_webhook_events 
-   WHERE event_hash = 'hash' AND processed = true;
-   ```
-
-2. Verify event hash generation is consistent
-
-3. Check for race conditions in async processing
-
-### 3. Inventory Sync Issues
-
-#### Problem: Stock levels don't match Shopify
-**Symptoms:**
-- Local inventory differs from Shopify
-- Manual adjustments not reflected
-
-**Solutions:**
-1. Check recent stock movements:
-   ```sql
-   SELECT * FROM stock_movements 
-   WHERE variant_id = 'variant-uuid'
-   ORDER BY created_at DESC
-   LIMIT 10;
-   ```
-
-2. Verify Shopify API credentials:
-   - Access token valid
-   - Correct location ID
-   - Proper scopes granted
-
-3. Manual sync from Shopify:
-   ```bash
-   POST /api/inventory/sync/:brandId/:productId
-   ```
-
-4. Check for failed API calls in logs
-
-#### Problem: "Resulting quantity cannot be negative"
-**Symptoms:**
-- Cannot adjust stock
-- Error on manual adjustment
-
-**Solutions:**
-1. Check current inventory level
-2. Adjust delta to not go below zero
-3. If legitimate, set to zero first, then adjust
-
-### 4. Database Issues
-
-#### Problem: RLS policy errors
-**Symptoms:**
-- "new row violates row-level security policy"
-- Cannot insert/update records
-
-**Solutions:**
-1. Check user has team membership:
-   ```sql
-   SELECT * FROM team_members WHERE user_id = auth.uid();
-   ```
-
-2. Verify RLS policies are correct:
-   ```sql
-   SELECT * FROM pg_policies WHERE tablename = 'table_name';
-   ```
-
-3. Use service role for backend operations:
-   ```typescript
-   // Backend should use SUPABASE_SERVICE_KEY
-   const supabase = createClient(url, serviceKey);
-   ```
-
-4. Check helper functions:
-   ```sql
-   SELECT get_user_team_ids(auth.uid());
-   SELECT get_user_brand_ids(auth.uid());
-   ```
-
-#### Problem: Slow queries
-**Symptoms:**
-- API timeouts
-- Long load times
-
-**Solutions:**
-1. Check query execution plan:
-   ```sql
-   EXPLAIN ANALYZE SELECT ...;
-   ```
-
-2. Add missing indexes:
-   ```sql
-   CREATE INDEX idx_name ON table(column);
-   ```
-
-3. Optimize queries:
-   - Limit results
-   - Use pagination
-   - Avoid N+1 queries
-
-4. Monitor Supabase dashboard for slow queries
-
-### 5. Frontend Issues
-
-#### Problem: "Network Error" on API calls
-**Symptoms:**
-- API calls fail
-- CORS errors in console
-
-**Solutions:**
-1. Check `VITE_API_URL` is correct
-2. Verify backend is running
-3. Check CORS configuration in backend:
-   ```typescript
-   app.use(cors({
-     origin: ['http://localhost:5173', 'https://your-frontend.com']
-   }));
-   ```
-
-4. Check browser console for details
-
-#### Problem: Components not updating
-**Symptoms:**
-- Stale data displayed
-- Changes not reflected
-
-**Solutions:**
-1. Check state management:
-   ```typescript
-   // Zustand store
-   const { user } = useAuthStore();
-   ```
-
-2. Verify API calls are made:
-   ```typescript
-   useEffect(() => {
-     fetchData();
-   }, [dependency]);
-   ```
-
-3. Check for errors in console
-4. Implement proper loading states
-
-### 6. Scheduled Jobs Issues
-
-#### Problem: Daily report reminders not sent
-**Symptoms:**
-- No notifications at 18:00
-- Cron job not running
-
-**Solutions:**
-1. Check cron expression:
-   ```typescript
-   cron.schedule('0 16 * * *', job, {
-     timezone: 'Africa/Cairo'
-   });
-   ```
-
-2. Verify timezone is correct:
-   ```bash
-   echo $TZ
-   # Should be: Africa/Cairo
-   ```
-
-3. Check logs at scheduled time
-4. Test job manually:
-   ```typescript
-   await dailyReportReminder();
-   ```
-
-5. Ensure backend is running continuously
-
-### 7. Shopify API Issues
-
-#### Problem: "Rate limit exceeded"
-**Symptoms:**
-- 429 errors
-- API calls failing
-
-**Solutions:**
-1. Implement rate limiting:
-   ```typescript
-   // Wait between requests
-   await new Promise(resolve => setTimeout(resolve, 500));
-   ```
-
-2. Use GraphQL for efficiency:
-   - Batch operations
-   - Request only needed fields
-
-3. Cache product data locally
-4. Implement exponential backoff
-
-#### Problem: "Invalid API credentials"
-**Symptoms:**
-- 401 errors from Shopify
-- Cannot access products
-
-**Solutions:**
-1. Verify access token:
-   - Check in Shopify admin
-   - Regenerate if needed
-
-2. Check API scopes:
-   - `read_products`
-   - `write_products`
-   - `read_inventory`
-   - `write_inventory`
-
-3. Verify shop domain is correct
-4. Test with Shopify API explorer
-
-### 8. Deployment Issues
-
-#### Problem: Environment variables not loaded
-**Symptoms:**
-- "Missing environment variables" error
-- Features not working in production
-
-**Solutions:**
-1. Verify variables in deployment platform:
-   - Vercel: Project Settings → Environment Variables
-   - Render: Environment tab
-
-2. Check variable names match:
-   - Frontend: Must start with `VITE_`
-   - Backend: No prefix needed
-
-3. Redeploy after adding variables
-
-#### Problem: Build failures
-**Symptoms:**
-- Deployment fails
-- TypeScript errors
-
-**Solutions:**
-1. Check build locally:
-   ```bash
-   npm run build
-   ```
-
-2. Fix TypeScript errors
-3. Check dependencies are installed
-4. Verify Node version matches
-
-### 9. Performance Issues
-
-#### Problem: Slow page loads
-**Symptoms:**
-- Long initial load time
-- Laggy interactions
-
-**Solutions:**
-1. Implement code splitting:
-   ```typescript
-   const Component = lazy(() => import('./Component'));
-   ```
-
-2. Add pagination to large lists
-3. Optimize images
-4. Use React.memo for expensive components
-5. Implement virtual scrolling for long lists
-
-#### Problem: High database load
-**Symptoms:**
-- Slow queries
-- Connection timeouts
-
-**Solutions:**
-1. Add database indexes
-2. Implement caching (Redis)
-3. Use connection pooling
-4. Optimize queries
-5. Archive old data
-
-### 10. Data Consistency Issues
-
-#### Problem: Inventory out of sync
-**Symptoms:**
-- Local inventory doesn't match Shopify
-- Missing stock movements
-
-**Solutions:**
-1. Check webhook delivery:
-   ```sql
-   SELECT * FROM shopify_webhook_events
-   WHERE created_at > NOW() - INTERVAL '1 hour'
-   ORDER BY created_at DESC;
-   ```
-
-2. Verify all webhooks are configured
-3. Check for failed webhook processing
-4. Manual reconciliation:
-   - Export from Shopify
-   - Compare with local DB
-   - Adjust discrepancies
-
-5. Implement periodic sync job
-
-## Debugging Tips
-
-### Enable Debug Logging
-
-**Backend:**
-```typescript
-// In logger.ts
-logger.level = 'debug';
+```
+GET /api/app/dashboard/overview 500 (Internal Server Error)
 ```
 
-**Frontend:**
-```typescript
-// In api.ts
-api.interceptors.request.use(config => {
-  console.log('Request:', config);
-  return config;
-});
-```
+#### الأسباب المحتملة
 
-### Check Database State
+1. قاعدة البيانات غير متصلة
+2. SUPABASE_SERVICE_KEY غير صحيح
+3. Migration لم يتم تطبيقه
+4. المستخدم ليس لديه store_id
 
-```sql
--- Check user's teams
-SELECT t.*, tm.role 
-FROM teams t
-JOIN team_members tm ON t.id = tm.team_id
-WHERE tm.user_id = 'user-uuid';
+#### الحلول
 
--- Check brand access
-SELECT b.* 
-FROM brands b
-JOIN team_brands tb ON b.id = tb.brand_id
-WHERE tb.team_id = 'team-uuid';
-
--- Check recent stock movements
-SELECT sm.*, v.sku, p.title
-FROM stock_movements sm
-JOIN variants v ON sm.variant_id = v.id
-JOIN products p ON v.product_id = p.id
-ORDER BY sm.created_at DESC
-LIMIT 20;
-
--- Check webhook events
-SELECT topic, processed, created_at
-FROM shopify_webhook_events
-ORDER BY created_at DESC
-LIMIT 20;
-```
-
-### Test API Endpoints
+**الحل 1: تحقق من Railway Logs**
 
 ```bash
-# Health check
-curl http://localhost:3002/health
-
-# Get inventory (with auth)
-curl -H "Authorization: Bearer YOUR_TOKEN" \
-  http://localhost:3002/api/inventory
-
-# Test webhook (local)
-curl -X POST http://localhost:3002/api/webhooks/shopify \
-  -H "Content-Type: application/json" \
-  -H "X-Shopify-Topic: inventory_levels/update" \
-  -H "X-Shopify-Shop-Domain: test.myshopify.com" \
-  -d '{"inventory_item_id": "123", "available": 10}'
+# في Railway Dashboard
+# اذهب إلى Deployments > View Logs
+# ابحث عن السطر الذي يحتوي على "error"
 ```
 
-## Getting Help
+**الحل 2: تحقق من Environment Variables**
 
-1. Check logs:
-   - Backend: Console or log files
-   - Frontend: Browser console
-   - Database: Supabase logs
+```bash
+# في Railway Dashboard
+# Variables > تأكد من:
+SUPABASE_URL=https://...
+SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
 
-2. Review documentation:
-   - API docs
-   - Architecture docs
-   - Feature docs
+**الحل 3: تطبيق Migration**
 
-3. Search issues:
-   - GitHub issues
-   - Stack Overflow
-   - Shopify community
+```sql
+-- في Supabase SQL Editor
+-- انسخ والصق محتوى:
+-- supabase/migrations/001_complete_schema.sql
+```
 
-4. Contact support:
-   - Supabase support
-   - Shopify support
-   - Team lead/admin
+**الحل 4: إنشاء Store للمستخدم**
 
-## Preventive Measures
+```sql
+-- 1. احصل على user_id
+SELECT id, email FROM auth.users;
 
-1. **Monitoring**
-   - Set up error tracking (Sentry)
-   - Monitor API response times
-   - Track webhook delivery rates
-   - Alert on failures
+-- 2. أنشئ store
+INSERT INTO stores (name, slug, status)
+VALUES ('My Store', 'my-store', 'active')
+RETURNING id;
 
-2. **Testing**
-   - Write unit tests
-   - Integration tests
-   - End-to-end tests
-   - Load testing
+-- 3. اربط المستخدم
+UPDATE user_profiles
+SET store_id = 'STORE_ID_HERE'
+WHERE id = 'USER_ID_HERE';
+```
 
-3. **Documentation**
-   - Keep docs updated
-   - Document changes
-   - Maintain runbooks
-   - Record incidents
+---
 
-4. **Backups**
-   - Regular database backups
-   - Test restore procedures
-   - Document recovery steps
-   - Keep backup of configs
+### 2. خطأ: "store_id context is required"
 
-5. **Updates**
-   - Keep dependencies updated
-   - Monitor security advisories
-   - Test updates in staging
-   - Plan maintenance windows
+#### الأعراض
+
+```json
+{
+  "error": "store_id context is required"
+}
+```
+
+#### السبب
+
+المستخدم ليس لديه store مرتبط في `user_profiles` أو `store_memberships`
+
+#### الحل
+
+```sql
+-- في Supabase SQL Editor
+
+-- 1. تحقق من المستخدم
+SELECT
+  up.id,
+  up.email,
+  up.store_id,
+  sm.store_id as membership_store_id
+FROM auth.users u
+LEFT JOIN user_profiles up ON u.id = up.id
+LEFT JOIN store_memberships sm ON u.id = sm.user_id
+WHERE u.email = 'your-email@example.com';
+
+-- 2. إذا كان store_id = NULL، أنشئ store
+INSERT INTO stores (name, slug, status)
+VALUES ('My Store', 'my-store', 'active')
+RETURNING id;
+
+-- 3. اربط المستخدم بالـ store
+UPDATE user_profiles
+SET store_id = 'STORE_ID_FROM_STEP_2'
+WHERE id = 'USER_ID_FROM_STEP_1';
+
+-- 4. أنشئ membership
+INSERT INTO store_memberships (store_id, user_id, store_role, status)
+VALUES ('STORE_ID', 'USER_ID', 'admin', 'active');
+```
+
+---
+
+### 3. خطأ: "Invalid or expired token"
+
+#### الأعراض
+
+```json
+{
+  "error": "Invalid or expired token"
+}
+```
+
+#### الأسباب
+
+1. JWT token منتهي
+2. المستخدم غير مسجل دخول
+3. Session منتهية
+
+#### الحلول
+
+**الحل 1: تسجيل خروج ودخول**
+
+1. اضغط Logout
+2. سجل دخول مرة أخرى
+3. جرب العملية مرة أخرى
+
+**الحل 2: مسح Cache**
+
+```javascript
+// في Console المتصفح
+localStorage.clear();
+sessionStorage.clear();
+location.reload();
+```
+
+**الحل 3: تحقق من Supabase Auth**
+
+```sql
+-- في Supabase SQL Editor
+SELECT * FROM auth.users WHERE email = 'your-email@example.com';
+```
+
+---
+
+### 4. خطأ Shopify: "duplicate key value violates unique constraint"
+
+#### الأعراض
+
+```json
+{
+  "error": "duplicate key value violates unique constraint \"brands_shopify_domain_key\"",
+  "code": "23505"
+}
+```
+
+#### السبب
+
+Shopify store متصل بحساب آخر أو brand آخر
+
+#### الحلول
+
+**الحل 1: افصل الاتصال القديم**
+
+```sql
+-- في Supabase SQL Editor
+UPDATE brands
+SET
+  shopify_access_token = NULL,
+  access_token = NULL,
+  connected_at = NULL,
+  is_configured = FALSE,
+  is_active = FALSE
+WHERE shopify_domain = 'your-store.myshopify.com';
+```
+
+**الحل 2: احذف Brand القديم**
+
+```sql
+-- ⚠️ احذر: هذا سيحذف كل البيانات المرتبطة
+DELETE FROM brands WHERE shopify_domain = 'your-store.myshopify.com';
+```
+
+**الحل 3: استخدم Store مختلف**
+
+- استخدم Shopify store مختلف
+- أو أنشئ development store جديد
+
+---
+
+### 5. خطأ: Webhook لا يعمل
+
+#### الأعراض
+
+- Orders لا تظهر في التطبيق
+- Inventory لا يتحدث تلقائياً
+- لا توجد logs في Railway
+
+#### الأسباب
+
+1. Webhook URL غير صحيح
+2. Webhook secret غير صحيح
+3. Shopify لم يسجل الـ webhooks
+
+#### الحلول
+
+**الحل 1: تحقق من Webhook URL**
+
+```
+الصحيح: https://your-backend.up.railway.app/api/webhooks/shopify
+الخطأ: https://your-frontend.vercel.app/api/webhooks/shopify
+```
+
+**الحل 2: تسجيل Webhooks يدوياً**
+
+```bash
+# استخدم Postman أو curl
+POST https://your-backend.up.railway.app/api/shopify/setup-webhooks/BRAND_ID
+Authorization: Bearer YOUR_JWT_TOKEN
+```
+
+**الحل 3: تحقق من Shopify Admin**
+
+1. اذهب إلى Shopify Admin
+2. Settings > Notifications > Webhooks
+3. تأكد من وجود webhooks للـ topics التالية:
+   - orders/create
+   - orders/updated
+   - products/update
+   - inventory_levels/update
+
+---
+
+### 6. خطأ: Frontend لا يتصل بـ Backend
+
+#### الأعراض
+
+```
+GET http://localhost:3002/api/app/me net::ERR_CONNECTION_REFUSED
+```
+
+#### الأسباب
+
+1. Backend غير مشغل
+2. VITE_API_URL غير صحيح
+3. CORS issue
+
+#### الحلول
+
+**الحل 1: تحقق من Backend**
+
+```bash
+curl https://your-backend.up.railway.app/health
+# يجب أن يرجع: {"status":"ok"}
+```
+
+**الحل 2: تحقق من Environment Variables**
+
+```env
+# في Vercel Dashboard
+VITE_API_URL=https://your-backend.up.railway.app
+# ⚠️ بدون trailing slash
+```
+
+**الحل 3: تحقق من CORS**
+
+```typescript
+// في backend/src/index.ts
+// تأكد من أن FRONTEND_URL صحيح
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+```
+
+---
+
+### 7. خطأ: Database Schema Mismatch
+
+#### الأعراض
+
+```
+ERROR: column "store_id" does not exist
+ERROR: relation "shopify_oauth_states" does not exist
+```
+
+#### السبب
+
+Migration لم يتم تطبيقه أو تطبيق جزئي
+
+#### الحل
+
+```sql
+-- في Supabase SQL Editor
+-- 1. احذف كل الجداول القديمة (⚠️ احذر: سيحذف كل البيانات)
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+GRANT ALL ON SCHEMA public TO postgres;
+GRANT ALL ON SCHEMA public TO public;
+
+-- 2. طبق Migration من جديد
+-- انسخ والصق محتوى: supabase/migrations/001_complete_schema.sql
+
+-- 3. شغل Setup Script
+-- انسخ والصق محتوى: SETUP_DATABASE.sql
+```
+
+---
+
+### 8. خطأ: Permission Denied
+
+#### الأعراض
+
+```json
+{
+  "error": "Missing required permission"
+}
+```
+
+#### السبب
+
+المستخدم ليس لديه الصلاحيات المطلوبة
+
+#### الحل
+
+```sql
+-- في Supabase SQL Editor
+-- 1. تحقق من صلاحيات المستخدم
+SELECT
+  up.id,
+  up.email,
+  up.role,
+  sm.store_role,
+  up.permissions
+FROM user_profiles up
+LEFT JOIN store_memberships sm ON up.id = sm.user_id
+WHERE up.id = 'USER_ID';
+
+-- 2. امنح صلاحيات admin
+UPDATE store_memberships
+SET store_role = 'admin'
+WHERE user_id = 'USER_ID';
+
+-- 3. أو أضف صلاحيات محددة
+UPDATE user_profiles
+SET permissions = jsonb_build_object(
+  'can_view_inventory', true,
+  'can_edit_inventory', true,
+  'can_view_orders', true,
+  'can_manage_users', true
+)
+WHERE id = 'USER_ID';
+```
+
+---
+
+## 🔍 أدوات التشخيص
+
+### 1. فحص صحة النظام
+
+```bash
+# Backend Health Check
+curl https://your-backend.up.railway.app/health
+
+# Database Connection
+curl https://your-backend.up.railway.app/api/app/me \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+### 2. فحص Logs
+
+**Railway Logs:**
+
+```bash
+# في Railway Dashboard
+Deployments > Latest > View Logs
+# ابحث عن:
+# - "error"
+# - "failed"
+# - "500"
+```
+
+**Supabase Logs:**
+
+```bash
+# في Supabase Dashboard
+Logs > Query Logs
+# ابحث عن slow queries أو errors
+```
+
+**Browser Console:**
+
+```javascript
+// افتح Developer Tools (F12)
+// Console tab
+// ابحث عن red errors
+```
+
+### 3. فحص Database
+
+```sql
+-- تحقق من عدد السجلات
+SELECT
+  'stores' as table_name, COUNT(*) as count FROM stores
+UNION ALL
+SELECT 'user_profiles', COUNT(*) FROM user_profiles
+UNION ALL
+SELECT 'store_memberships', COUNT(*) FROM store_memberships
+UNION ALL
+SELECT 'brands', COUNT(*) FROM brands
+UNION ALL
+SELECT 'products', COUNT(*) FROM products
+UNION ALL
+SELECT 'shopify_orders', COUNT(*) FROM shopify_orders;
+
+-- تحقق من آخر نشاط
+SELECT
+  'Last User' as type,
+  email,
+  created_at
+FROM auth.users
+ORDER BY created_at DESC
+LIMIT 1;
+
+SELECT
+  'Last Order' as type,
+  order_name,
+  created_at_shopify
+FROM shopify_orders
+ORDER BY created_at_shopify DESC
+LIMIT 1;
+```
+
+---
+
+## 📞 الحصول على المساعدة
+
+### قبل طلب المساعدة، جهز:
+
+1. **Railway Logs** (آخر 50 سطر)
+2. **Browser Console Errors** (screenshot)
+3. **خطوات إعادة إنتاج المشكلة**
+4. **Environment Variables** (بدون القيم السرية)
+5. **Database Schema Version**
+
+### معلومات مفيدة:
+
+```sql
+-- في Supabase SQL Editor
+-- احصل على معلومات النظام
+SELECT
+  'Database Version' as info,
+  version() as value
+UNION ALL
+SELECT
+  'Total Users',
+  COUNT(*)::text
+FROM auth.users
+UNION ALL
+SELECT
+  'Total Stores',
+  COUNT(*)::text
+FROM stores
+UNION ALL
+SELECT
+  'Total Products',
+  COUNT(*)::text
+FROM products;
+```
+
+---
+
+## ✅ Checklist للتشخيص
+
+عند مواجهة مشكلة، تحقق من:
+
+- [ ] Railway backend يعمل (health check)
+- [ ] Supabase متصل (query logs)
+- [ ] Environment variables صحيحة
+- [ ] Migration تم تطبيقه
+- [ ] المستخدم لديه store_id
+- [ ] المستخدم لديه صلاحيات
+- [ ] JWT token صالح
+- [ ] Browser console لا يظهر أخطاء
+- [ ] Network tab يظهر 200 responses
+- [ ] Shopify webhooks مسجلة
+
+---
+
+**إذا استمرت المشكلة، راجع [SETUP_GUIDE.md](../SETUP_GUIDE.md) أو افتح issue في GitHub**

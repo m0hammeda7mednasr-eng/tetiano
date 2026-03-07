@@ -3,13 +3,33 @@ import crypto from "crypto";
 import { supabase } from "../config/supabase";
 import { logger } from "../utils/logger";
 import { WebhookHandler } from "../services/webhookHandler";
+import rateLimit from "express-rate-limit";
 
 const router = Router();
 const webhookHandler = new WebhookHandler();
 const GLOBAL_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET || "";
 
+// Rate limiting for webhooks - 1000 requests per minute per store
+const webhookRateLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 1000,
+  message: { error: "Too many webhook requests, please try again later" },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => {
+    // Rate limit by shop domain
+    const shopDomain = String(req.headers["x-shopify-shop-domain"] || "");
+    return shopDomain || req.ip || "unknown";
+  },
+  skip: (req: Request) => {
+    // Skip rate limiting for health checks
+    return req.path === "/health";
+  },
+});
+
 function isSchemaCompatibilityError(error: any): boolean {
-  const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  const text =
+    `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
   return (
     text.includes("column") ||
     text.includes("relation") ||
@@ -19,13 +39,21 @@ function isSchemaCompatibilityError(error: any): boolean {
 }
 
 function isMultipleRowsError(error: any): boolean {
-  const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  const text =
+    `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
   return text.includes("multiple") && text.includes("rows");
 }
 
-function verifyHmac(rawBody: Buffer | string, hmacHeader: string, secret: string): boolean {
+function verifyHmac(
+  rawBody: Buffer | string,
+  hmacHeader: string,
+  secret: string,
+): boolean {
   if (!hmacHeader || !secret) return false;
-  const hash = crypto.createHmac("sha256", secret).update(rawBody).digest("base64");
+  const hash = crypto
+    .createHmac("sha256", secret)
+    .update(rawBody)
+    .digest("base64");
   try {
     return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(hmacHeader));
   } catch {
@@ -68,16 +96,24 @@ async function insertWebhookEvent(params: {
   ];
 
   for (const payload of payloads) {
-    const result = await supabase.from("shopify_webhook_events").insert(payload);
+    const result = await supabase
+      .from("shopify_webhook_events")
+      .insert(payload);
     if (!result.error) return;
     if (!isSchemaCompatibilityError(result.error)) {
-      logger.warn("Webhook event insert failed", { error: result.error.message });
+      logger.warn("Webhook event insert failed", {
+        error: result.error.message,
+      });
       return;
     }
   }
 }
 
-async function markWebhookStatus(webhookId: string, status: "processed" | "failed", errorMessage?: string) {
+async function markWebhookStatus(
+  webhookId: string,
+  status: "processed" | "failed",
+  errorMessage?: string,
+) {
   const updates: Record<string, unknown>[] = [
     {
       status,
@@ -106,91 +142,136 @@ async function markWebhookStatus(webhookId: string, status: "processed" | "faile
   }
 }
 
-router.post("/shopify", async (req: Request, res: Response) => {
-  const hmacHeader = String(req.headers["x-shopify-hmac-sha256"] || "");
-  const topic = String(req.headers["x-shopify-topic"] || "");
-  const shopDomain = String(req.headers["x-shopify-shop-domain"] || "");
-  const webhookIdHeader = String(req.headers["x-shopify-webhook-id"] || "");
-  const rawBody = req.body as Buffer;
+router.post(
+  "/shopify",
+  webhookRateLimiter,
+  async (req: Request, res: Response) => {
+    const hmacHeader = String(req.headers["x-shopify-hmac-sha256"] || "");
+    const topic = String(req.headers["x-shopify-topic"] || "");
+    const shopDomain = String(req.headers["x-shopify-shop-domain"] || "");
+    const webhookIdHeader = String(req.headers["x-shopify-webhook-id"] || "");
+    const rawBody = req.body as Buffer;
 
-  if (!rawBody || !rawBody.length) {
-    logger.warn("Webhook rejected: empty body", { topic, shopDomain });
-    return res.status(400).json({ error: "Empty body" });
-  }
+    if (!rawBody || !rawBody.length) {
+      logger.warn("Webhook rejected: empty body", { topic, shopDomain });
+      return res.status(400).json({ error: "Empty body" });
+    }
 
-  let webhookSecret = GLOBAL_WEBHOOK_SECRET;
-  let storeId: string | null = null;
+    // Generate webhook ID for idempotency check
+    const webhookId =
+      webhookIdHeader ||
+      crypto
+        .createHash("sha256")
+        .update(`${topic}:${shopDomain}:${rawBody.toString("utf8")}`)
+        .digest("hex");
 
-  if (shopDomain) {
+    // Check if webhook already processed (idempotency)
     try {
-      const byDomain = await supabase
-        .from("brands")
-        .select("id, webhook_secret, api_secret")
-        .eq("shopify_domain", shopDomain)
+      const existing = await supabase
+        .from("shopify_webhook_events")
+        .select("id, processed, status")
+        .eq("webhook_id", webhookId)
         .maybeSingle();
 
-      let brand = byDomain.data;
-      if (byDomain.error && isMultipleRowsError(byDomain.error)) {
-        const fallback = await supabase
+      if (!existing.error && existing.data) {
+        const isProcessed =
+          existing.data.processed === true ||
+          existing.data.status === "processed";
+        if (isProcessed) {
+          logger.info("Webhook already processed, skipping", {
+            topic,
+            shopDomain,
+            webhookId,
+          });
+          return res.status(200).json({ received: true, duplicate: true });
+        }
+      }
+    } catch (idempotencyError: any) {
+      logger.warn("Idempotency check failed, continuing", {
+        error: idempotencyError?.message,
+      });
+    }
+
+    let webhookSecret = GLOBAL_WEBHOOK_SECRET;
+    let storeId: string | null = null;
+
+    if (shopDomain) {
+      try {
+        const byDomain = await supabase
           .from("brands")
           .select("id, webhook_secret, api_secret")
           .eq("shopify_domain", shopDomain)
-          .limit(1)
           .maybeSingle();
-        brand = fallback.data;
+
+        let brand = byDomain.data;
+        if (byDomain.error && isMultipleRowsError(byDomain.error)) {
+          const fallback = await supabase
+            .from("brands")
+            .select("id, webhook_secret, api_secret")
+            .eq("shopify_domain", shopDomain)
+            .limit(1)
+            .maybeSingle();
+          brand = fallback.data;
+        }
+
+        if (brand?.id) storeId = String(brand.id);
+        if (brand?.webhook_secret) webhookSecret = String(brand.webhook_secret);
+        else if (brand?.api_secret) webhookSecret = String(brand.api_secret);
+      } catch {
+        // Ignore lookup errors and use global secret.
       }
-
-      if (brand?.id) storeId = String(brand.id);
-      if (brand?.webhook_secret) webhookSecret = String(brand.webhook_secret);
-      else if (brand?.api_secret) webhookSecret = String(brand.api_secret);
-    } catch {
-      // Ignore lookup errors and use global secret.
     }
-  }
 
-  if (!verifyHmac(rawBody, hmacHeader, webhookSecret)) {
-    logger.warn("Webhook rejected: invalid signature", { topic, shopDomain });
-    return res.status(401).json({ error: "Invalid webhook signature" });
-  }
+    if (!verifyHmac(rawBody, hmacHeader, webhookSecret)) {
+      logger.warn("Webhook rejected: invalid signature", { topic, shopDomain });
+      return res.status(401).json({ error: "Invalid webhook signature" });
+    }
 
-  let payload: any;
-  try {
-    payload = JSON.parse(rawBody.toString("utf8"));
-  } catch {
-    logger.warn("Webhook rejected: invalid JSON", { topic, shopDomain });
-    return res.status(400).json({ error: "Invalid JSON body" });
-  }
+    let payload: any;
+    try {
+      payload = JSON.parse(rawBody.toString("utf8"));
+    } catch {
+      logger.warn("Webhook rejected: invalid JSON", { topic, shopDomain });
+      return res.status(400).json({ error: "Invalid JSON body" });
+    }
 
-  const webhookId =
-    webhookIdHeader ||
-    crypto.createHash("sha256").update(`${topic}:${shopDomain}:${rawBody.toString("utf8")}`).digest("hex");
+    const webhookId =
+      webhookIdHeader ||
+      crypto
+        .createHash("sha256")
+        .update(`${topic}:${shopDomain}:${rawBody.toString("utf8")}`)
+        .digest("hex");
 
-  await insertWebhookEvent({
-    storeId,
-    topic,
-    shopDomain,
-    payload,
-    webhookId,
-  });
-
-  logger.info("Webhook accepted", { topic, shopDomain, webhookId });
-  res.status(200).json({ received: true });
-
-  webhookHandler
-    .handle(topic, payload, shopDomain)
-    .then(async () => {
-      await markWebhookStatus(webhookId, "processed");
-    })
-    .catch(async (error: any) => {
-      logger.error("Webhook async processing failed", {
-        topic,
-        shopDomain,
-        webhookId,
-        error: error?.message,
-      });
-      await markWebhookStatus(webhookId, "failed", error?.message || "processing_error");
+    await insertWebhookEvent({
+      storeId,
+      topic,
+      shopDomain,
+      payload,
+      webhookId,
     });
-});
+
+    logger.info("Webhook accepted", { topic, shopDomain, webhookId });
+    res.status(200).json({ received: true });
+
+    webhookHandler
+      .handle(topic, payload, shopDomain)
+      .then(async () => {
+        await markWebhookStatus(webhookId, "processed");
+      })
+      .catch(async (error: any) => {
+        logger.error("Webhook async processing failed", {
+          topic,
+          shopDomain,
+          webhookId,
+          error: error?.message,
+        });
+        await markWebhookStatus(
+          webhookId,
+          "failed",
+          error?.message || "processing_error",
+        );
+      });
+  },
+);
 
 export default router;
-
