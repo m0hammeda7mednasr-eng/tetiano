@@ -10,6 +10,7 @@
     "test": "ts-node tests/integration.test.ts",
     "test:webhooks": "ts-node tests/shopify-webhook.test.ts",
     "test:all": "npm run test && npm run test:webhooks",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\""
   },
