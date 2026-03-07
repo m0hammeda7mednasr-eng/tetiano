@@ -60,7 +60,7 @@ function validateField(value: any, rule: ValidationRule): string | null {
       }
       break;
 
-    case "number":
+    case "number": {
       const num = Number(value);
       if (!Number.isFinite(num)) {
         return `${rule.field} must be a valid number`;
@@ -72,6 +72,7 @@ function validateField(value: any, rule: ValidationRule): string | null {
         return `${rule.field} must be at most ${rule.max}`;
       }
       break;
+    }
 
     case "boolean":
       if (typeof value !== "boolean") {
@@ -79,7 +80,7 @@ function validateField(value: any, rule: ValidationRule): string | null {
       }
       break;
 
-    case "email":
+    case "email": {
       if (typeof value !== "string") {
         return `${rule.field} must be a string`;
       }
@@ -88,6 +89,7 @@ function validateField(value: any, rule: ValidationRule): string | null {
         return `${rule.field} must be a valid email`;
       }
       break;
+    }
 
     case "url":
       if (typeof value !== "string") {
@@ -100,7 +102,7 @@ function validateField(value: any, rule: ValidationRule): string | null {
       }
       break;
 
-    case "uuid":
+    case "uuid": {
       if (typeof value !== "string") {
         return `${rule.field} must be a string`;
       }
@@ -110,6 +112,7 @@ function validateField(value: any, rule: ValidationRule): string | null {
         return `${rule.field} must be a valid UUID`;
       }
       break;
+    }
 
     case "array":
       if (!Array.isArray(value)) {
