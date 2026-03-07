@@ -216,6 +216,213 @@ function canViewFinance(req: AuthRequest): boolean {
   return false;
 }
 
+function toNullableNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sumNetProfitRows(rows: Array<Record<string, unknown>>): number | null {
+  if (!rows.length) return null;
+  const total = rows.reduce((sum, row) => {
+    const value = toNullableNumber(row.net_profit);
+    return value === null ? sum : sum + value;
+  }, 0);
+  return Number.isFinite(total) ? total : null;
+}
+
+async function fetchLatestOrderScoped(storeId: string): Promise<Record<string, unknown> | null> {
+  const select =
+    "id, shopify_order_id, order_name, order_number, currency, created_at_shopify, updated_at, store_id, brand_id";
+
+  let latest = await supabase
+    .from("shopify_orders")
+    .select(select)
+    .eq("store_id", storeId)
+    .order("created_at_shopify", { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (latest.error && isSchemaCompatibilityError(latest.error)) {
+    latest = await supabase
+      .from("shopify_orders")
+      .select(select)
+      .eq("brand_id", storeId)
+      .order("created_at_shopify", { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle();
+  }
+
+  if (latest.error) {
+    throw latest.error;
+  }
+  return (latest.data as Record<string, unknown> | null) || null;
+}
+
+async function fetchAllNetProfitRowsScoped(params: {
+  table: string;
+  scopeColumn: "store_id" | "brand_id";
+  storeId: string;
+}): Promise<Array<Record<string, unknown>>> {
+  const pageSize = 1000;
+  const rows: Array<Record<string, unknown>> = [];
+  let page = 0;
+
+  while (true) {
+    const from = page * pageSize;
+    const to = from + pageSize - 1;
+    const result = await supabase
+      .from(params.table)
+      .select("net_profit")
+      .eq(params.scopeColumn, params.storeId)
+      .range(from, to);
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    const pageRows = (result.data || []) as Array<Record<string, unknown>>;
+    rows.push(...pageRows);
+    if (pageRows.length < pageSize) {
+      break;
+    }
+    page += 1;
+  }
+
+  return rows;
+}
+
+async function fetchTotalNetProfit(storeId: string): Promise<number | null> {
+  try {
+    const financialRows = await fetchAllNetProfitRowsScoped({
+      table: "order_financials",
+      scopeColumn: "store_id",
+      storeId,
+    });
+    const total = sumNetProfitRows(financialRows);
+    if (total !== null) {
+      return total;
+    }
+  } catch (error: any) {
+    if (!isSchemaCompatibilityError(error)) {
+      throw error;
+    }
+  }
+
+  try {
+    const orderRows = await fetchAllNetProfitRowsScoped({
+      table: "shopify_orders",
+      scopeColumn: "store_id",
+      storeId,
+    });
+    const total = sumNetProfitRows(orderRows);
+    if (total !== null) {
+      return total;
+    }
+  } catch (error: any) {
+    if (!isSchemaCompatibilityError(error)) {
+      throw error;
+    }
+  }
+
+  try {
+    const fallbackRows = await fetchAllNetProfitRowsScoped({
+      table: "shopify_orders",
+      scopeColumn: "brand_id",
+      storeId,
+    });
+    return sumNetProfitRows(fallbackRows);
+  } catch (error: any) {
+    if (!isSchemaCompatibilityError(error)) {
+      throw error;
+    }
+  }
+
+  return null;
+}
+
+async function fetchLatestNetProfit(storeId: string, latestOrderId: string): Promise<number | null> {
+  try {
+    const byFinancials = await supabase
+      .from("order_financials")
+      .select("net_profit")
+      .eq("store_id", storeId)
+      .eq("order_id", latestOrderId)
+      .maybeSingle();
+
+    if (!byFinancials.error) {
+      return toNullableNumber(byFinancials.data?.net_profit);
+    }
+    if (!isSchemaCompatibilityError(byFinancials.error)) {
+      throw byFinancials.error;
+    }
+  } catch (error: any) {
+    if (!isSchemaCompatibilityError(error)) {
+      throw error;
+    }
+  }
+
+  try {
+    const byOrders = await supabase
+      .from("shopify_orders")
+      .select("net_profit")
+      .eq("id", latestOrderId)
+      .maybeSingle();
+
+    if (!byOrders.error) {
+      return toNullableNumber(byOrders.data?.net_profit);
+    }
+    if (!isSchemaCompatibilityError(byOrders.error)) {
+      throw byOrders.error;
+    }
+  } catch (error: any) {
+    if (!isSchemaCompatibilityError(error)) {
+      throw error;
+    }
+  }
+
+  return null;
+}
+
+async function countMembershipByStatus(storeId: string, status: "active" | "inactive"): Promise<number> {
+  const result = await supabase
+    .from("store_memberships")
+    .select("id", { count: "exact", head: true })
+    .eq("store_id", storeId)
+    .eq("status", status);
+
+  if (result.error) {
+    if (isSchemaCompatibilityError(result.error)) {
+      return 0;
+    }
+    throw result.error;
+  }
+
+  return result.count || 0;
+}
+
+async function loadNetProfitSummary(storeId: string): Promise<{
+  latestNetProfit: number | null;
+  totalNetProfit: number | null;
+  latestOrderName: string | null;
+  latestOrderNumber: number | null;
+  latestOrderCurrency: string | null;
+  latestOrderAt: string | null;
+}> {
+  const latestOrder = await fetchLatestOrderScoped(storeId);
+  const latestOrderId = latestOrder?.id ? String(latestOrder.id) : "";
+  const latestNetProfit = latestOrderId ? await fetchLatestNetProfit(storeId, latestOrderId) : null;
+  const totalNetProfit = await fetchTotalNetProfit(storeId);
+
+  return {
+    latestNetProfit,
+    totalNetProfit,
+    latestOrderName: latestOrder?.order_name ? String(latestOrder.order_name) : null,
+    latestOrderNumber: toNullableNumber(latestOrder?.order_number),
+    latestOrderCurrency: latestOrder?.currency ? String(latestOrder.currency) : null,
+    latestOrderAt: latestOrder?.created_at_shopify ? String(latestOrder.created_at_shopify) : null,
+  };
+}
+
 async function getStoreBrandConfigOrThrow(storeId: string) {
   const brand = await supabase
     .from("brands")
@@ -477,13 +684,24 @@ router.get("/dashboard/overview", async (req: AuthRequest, res: Response) => {
   if (!storeId) return;
 
   try {
-    const [productsCount, ordersCount, customersCount, reportsCount, membersCount] = await Promise.all([
+    const [productsCount, ordersCount, customersCount, reportsCount, membersCount, membersActive, membersInactive] = await Promise.all([
       countScoped("products", storeId),
       countScoped("shopify_orders", storeId),
       countScoped("shopify_customers", storeId),
       countScoped("reports", storeId).catch(() => 0),
       countScoped("store_memberships", storeId).catch(() => 0),
+      countMembershipByStatus(storeId, "active").catch(() => 0),
+      countMembershipByStatus(storeId, "inactive").catch(() => 0),
     ]);
+    const netProfitSummary = canViewFinance(req)
+      ? await loadNetProfitSummary(storeId).catch((error: any) => {
+          logger.warn("Failed to load net profit summary for dashboard overview", {
+            storeId,
+            error: error?.message,
+          });
+          return null;
+        })
+      : null;
 
     let stockResult = await supabase
       .from("inventory_levels")
@@ -506,7 +724,15 @@ router.get("/dashboard/overview", async (req: AuthRequest, res: Response) => {
         customers_total: customersCount,
         reports_total: reportsCount,
         members_total: membersCount,
+        members_active_total: membersActive,
+        members_inactive_total: membersInactive,
         low_stock_total: lowStock,
+        latest_net_profit: netProfitSummary?.latestNetProfit ?? null,
+        total_net_profit: netProfitSummary?.totalNetProfit ?? null,
+        latest_net_profit_order_name: netProfitSummary?.latestOrderName ?? null,
+        latest_net_profit_order_number: netProfitSummary?.latestOrderNumber ?? null,
+        latest_net_profit_currency: netProfitSummary?.latestOrderCurrency ?? null,
+        latest_net_profit_at: netProfitSummary?.latestOrderAt ?? null,
       },
     });
   } catch (error: any) {
@@ -1472,12 +1698,56 @@ router.get("/shopify/status", async (req: AuthRequest, res: Response) => {
     }
     if (result.error) throw result.error;
 
+    let fallbackData: Record<string, any> | null = null;
+    if (!result.data || result.data.status !== "connected" || !result.data.connected_at) {
+      const fallback = await supabase
+        .from("brands")
+        .select("id, shopify_domain, connected_at, shopify_scopes, is_active, is_configured")
+        .eq("id", storeId)
+        .maybeSingle();
+      if (fallback.error && !isSchemaCompatibilityError(fallback.error)) {
+        throw fallback.error;
+      }
+      fallbackData = (fallback.data as Record<string, any> | null) || null;
+    }
+
+    const connectedFromConnection = result.data?.status === "connected";
+    const connectedFromFallback = Boolean(fallbackData?.connected_at || fallbackData?.is_configured);
+    const connected = connectedFromConnection || connectedFromFallback;
+    const shopDomain = result.data?.shop_domain || fallbackData?.shopify_domain || "";
+    const scopes = result.data?.scopes || fallbackData?.shopify_scopes || "";
+    const connectedAt = result.data?.connected_at || fallbackData?.connected_at || null;
+    const status = connected
+      ? "connected"
+      : result.data?.status || (fallbackData?.is_active ? "connected" : "disconnected");
+
+    // Heal stale connection rows when OAuth callback updated brands but not shopify_connections.
+    if (!connectedFromConnection && connectedFromFallback && shopDomain) {
+      const healUpdate = await supabase.from("shopify_connections").upsert(
+        {
+          store_id: storeId,
+          shop_domain: shopDomain,
+          scopes,
+          connected_at: connectedAt || nowIso(),
+          status: "connected",
+          updated_at: nowIso(),
+        },
+        { onConflict: "store_id" },
+      );
+      if (healUpdate.error && !isSchemaCompatibilityError(healUpdate.error)) {
+        logger.warn("Failed to heal stale shopify_connections status", {
+          storeId,
+          error: healUpdate.error.message,
+        });
+      }
+    }
+
     return res.json({
-      connected: result.data?.status === "connected",
-      status: result.data?.status || "disconnected",
-      shop_domain: result.data?.shop_domain || "",
-      scopes: result.data?.scopes || "",
-      connected_at: result.data?.connected_at || null,
+      connected,
+      status,
+      shop_domain: shopDomain,
+      scopes,
+      connected_at: connectedAt,
       updated_at: result.data?.updated_at || null,
     });
   } catch (error: any) {
