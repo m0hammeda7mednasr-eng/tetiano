@@ -673,50 +673,6 @@ async function countScoped(table: string, storeId: string): Promise<number> {
   return result.count || 0;
 }
 
-router.get("/me", async (req: AuthRequest, res: Response) => {
-  const storeId = resolveStoreId(req);
-
-  if (!storeId) {
-    return res.status(400).json({ error: "store_id context is required" });
-  }
-
-  try {
-    let safeStore: any = null;
-    if (storeId) {
-      const store = await supabase
-        .from("stores")
-        .select("id, name, slug, status, admin_user_id, owner_user_id")
-        .eq("id", storeId)
-        .maybeSingle();
-      safeStore =
-        store.data ||
-        ({
-          id: storeId,
-          name: "Store",
-          slug: null,
-          status: "active",
-          admin_user_id: null,
-        } as any);
-    }
-
-    return res.json({
-      user: {
-        id: req.user?.id,
-        email: req.user?.email || null,
-        store_role: req.user?.storeRole || null,
-        permissions: req.user?.permissions || {},
-      },
-      store: safeStore,
-      profile: req.user?.profile || null,
-    });
-  } catch (error: any) {
-    logger.error("App /me failed", { error: error?.message });
-    return res
-      .status(500)
-      .json({ error: "Failed to load current user context" });
-  }
-});
-
 router.get("/dashboard/overview", async (req: AuthRequest, res: Response) => {
   const storeId = ensureStoreId(req, res);
   if (!storeId) return;
