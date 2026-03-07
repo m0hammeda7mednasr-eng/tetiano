@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "nodemon --exec ts-node src/index.ts",
     "build": "tsc",
+    "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "test": "ts-node tests/integration.test.ts",
     "test:webhooks": "ts-node tests/shopify-webhook.test.ts",

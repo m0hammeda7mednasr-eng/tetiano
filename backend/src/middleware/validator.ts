@@ -60,7 +60,7 @@ function validateField(value: any, rule: ValidationRule): string | null {
       }
       break;
 
-    case "number":
+    case "number": {
       const num = Number(value);
       if (!Number.isFinite(num)) {
         return `${rule.field} must be a valid number`;
@@ -72,6 +72,7 @@ function validateField(value: any, rule: ValidationRule): string | null {
         return `${rule.field} must be at most ${rule.max}`;
       }
       break;
+    }
 
     case "boolean":
       if (typeof value !== "boolean") {
@@ -83,9 +84,11 @@ function validateField(value: any, rule: ValidationRule): string | null {
       if (typeof value !== "string") {
         return `${rule.field} must be a string`;
       }
-      const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailPattern.test(value)) {
-        return `${rule.field} must be a valid email`;
+      {
+        const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailPattern.test(value)) {
+          return `${rule.field} must be a valid email`;
+        }
       }
       break;
 
@@ -104,10 +107,12 @@ function validateField(value: any, rule: ValidationRule): string | null {
       if (typeof value !== "string") {
         return `${rule.field} must be a string`;
       }
-      const uuidPattern =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      if (!uuidPattern.test(value)) {
-        return `${rule.field} must be a valid UUID`;
+      {
+        const uuidPattern =
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!uuidPattern.test(value)) {
+          return `${rule.field} must be a valid UUID`;
+        }
       }
       break;
 
