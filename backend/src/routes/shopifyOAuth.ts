@@ -236,6 +236,15 @@ function isMultipleRowsError(error: any): boolean {
   return text.includes("multiple") && text.includes("rows");
 }
 
+function isShopDomainUniqueViolation(error: any): boolean {
+  const code = String(error?.code || "");
+  const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    (code === "23505" && (text.includes("shopify_domain") || text.includes("brands_shopify_domain_key"))) ||
+    (text.includes("duplicate key value") && text.includes("shopify_domain"))
+  );
+}
+
 function isStateExpired(stateRow: OAuthStateRecord): boolean {
   if (stateRow.expires_at) {
     return Date.now() > new Date(stateRow.expires_at).getTime();
@@ -1096,6 +1105,15 @@ router.post("/get-install-url", authenticate, async (req: AuthRequest, res: Resp
       await ensureUserSingleBrand(req.user.id, String(brand.id));
     }
 
+    const existingByShopDomain = await findBrandByShopDomain(shopDomain);
+    if (existingByShopDomain && String(existingByShopDomain.id) !== String(brand.id)) {
+      throw new HttpError(
+        409,
+        "store_already_linked",
+        "This Shopify store is already linked to another account.",
+      );
+    }
+
     const credentialUpdates: Record<string, unknown> = {
       shopify_domain: shopDomain,
       updated_at: new Date().toISOString(),
@@ -1109,6 +1127,13 @@ router.post("/get-install-url", authenticate, async (req: AuthRequest, res: Resp
       .update(credentialUpdates)
       .eq("id", brand.id);
     if (updateError) {
+      if (isShopDomainUniqueViolation(updateError)) {
+        throw new HttpError(
+          409,
+          "store_already_linked",
+          "This Shopify store is already linked to another account.",
+        );
+      }
       throw updateError;
     }
 
@@ -1134,11 +1159,20 @@ router.post("/get-install-url", authenticate, async (req: AuthRequest, res: Resp
 
     const schemaMismatch = isSchemaMismatchError(error);
     const supabaseAccessError = isSupabaseAccessError(error);
+    const shopDomainConflict = isShopDomainUniqueViolation(error);
     const status =
-      error instanceof HttpError ? error.status : schemaMismatch || supabaseAccessError ? 503 : 500;
+      error instanceof HttpError
+        ? error.status
+        : shopDomainConflict
+          ? 409
+          : schemaMismatch || supabaseAccessError
+            ? 503
+            : 500;
     const code =
       error instanceof HttpError
         ? error.code
+        : shopDomainConflict
+          ? "store_already_linked"
         : schemaMismatch
           ? "schema_mismatch"
           : supabaseAccessError
@@ -1147,6 +1181,8 @@ router.post("/get-install-url", authenticate, async (req: AuthRequest, res: Resp
     const message =
       error instanceof HttpError
         ? error.message
+        : shopDomainConflict
+          ? "This Shopify store is already linked to another account."
         : schemaMismatch
           ? "Database schema is missing required Shopify OAuth tables/columns. Run latest migrations."
           : supabaseAccessError
