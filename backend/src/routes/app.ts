@@ -1347,42 +1347,44 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
       shop: shopDomain,
     });
   } catch (error: any) {
-    const status = Number(error?.status || 0);
     logger.error("App shopify connect failed", {
       error: error?.message,
       code: error?.code,
       details: error?.details,
       hint: error?.hint,
-      status,
       storeId,
       shopDomain,
     });
 
-    if (status >= 400 && status < 600) {
-      if (status === 404 && error?.code === "brand_not_found") {
-        return res.status(503).json({
-          error: "Legacy Shopify compatibility mapping is missing for this store. Apply migration 019 and retry.",
-          code: "legacy_brand_mapping_missing",
-        });
-      }
-      if (status >= 500) {
-        return res.status(503).json({
-          error: error?.message || "Shopify OAuth compatibility endpoint is temporarily unavailable.",
-          code: error?.code || "shopify_oauth_compat_failed",
-        });
-      }
-      return res.status(status).json({ error: error?.message || "Failed to start Shopify OAuth flow", code: error?.code });
-    }
-
-    if (isSchemaCompatibilityError(error)) {
-      return res.status(503).json({
-        error: "Database schema is not compatible with Shopify OAuth flow. Apply latest migrations and retry.",
+    // Handle duplicate key error (brand already exists)
+    if (error?.code === '23505') {
+      return res.status(409).json({
+        error: "This Shopify store is already connected. Please disconnect first or use a different store.",
+        code: "duplicate_shop_domain",
+        details: error?.details,
       });
     }
 
-    return res.status(503).json({
-      error: "Shopify OAuth flow is temporarily unavailable. Check backend logs and schema compatibility.",
-      code: "shopify_oauth_unavailable",
+    // Handle other database errors
+    if (error?.code && error?.code.startsWith('23')) {
+      return res.status(500).json({
+        error: "Database error occurred. Please try again or contact support.",
+        code: error?.code,
+      });
+    }
+
+    // Handle schema compatibility errors
+    if (isSchemaCompatibilityError(error)) {
+      return res.status(500).json({
+        error: "Database schema is not compatible. Please run migration 019.",
+        code: "schema_incompatible",
+      });
+    }
+
+    // Generic error
+    return res.status(500).json({
+      error: error?.message || "Failed to start Shopify OAuth flow",
+      code: "shopify_connect_failed",
     });
   }
 });
