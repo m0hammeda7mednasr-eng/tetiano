@@ -1889,8 +1889,18 @@ router.patch(
 );
 
 router.get("/shopify/status", async (req: AuthRequest, res: Response) => {
-  const storeId = ensureStoreId(req, res);
-  if (!storeId) return;
+  // Manual store check - allow without store to return "not connected"
+  const storeId = resolveStoreId(req);
+  if (!storeId) {
+    return res.json({
+      connected: false,
+      status: "no_store",
+      shop_domain: "",
+      scopes: "",
+      connected_at: null,
+      message: "No store linked to your account",
+    });
+  }
 
   try {
     logger.info("Shopify status requested", {
@@ -2050,196 +2060,206 @@ router.post(
   },
 );
 
-router.post(
-  "/shopify/connect",
-  requireStorePermission("shopify.manage"),
-  async (req: AuthRequest, res: Response) => {
-    const storeId = ensureStoreId(req, res);
-    if (!storeId) return;
+router.post("/shopify/connect", async (req: AuthRequest, res: Response) => {
+  // Manual store check instead of middleware
+  const storeId = resolveStoreId(req);
+  if (!storeId) {
+    return res.status(400).json({
+      error: "No store linked to your account. Please create a store first.",
+      code: "store_required",
+    });
+  }
 
-    const rawShop = String(
-      req.body?.shop || req.body?.shop_domain || "",
-    ).trim();
-    const apiKey = String(req.body?.api_key || "").trim();
-    const apiSecret = String(req.body?.api_secret || "").trim();
+  // Check permission manually
+  if (
+    !req.user?.permissions?.["shopify.manage"] &&
+    req.user?.storeRole !== "admin"
+  ) {
+    return res.status(403).json({
+      error: "You don't have permission to manage Shopify connection",
+      code: "permission_denied",
+    });
+  }
 
-    if (!rawShop || !apiKey || !apiSecret) {
-      return res
-        .status(400)
-        .json({ error: "shop, api_key and api_secret are required" });
-    }
+  const rawShop = String(req.body?.shop || req.body?.shop_domain || "").trim();
+  const apiKey = String(req.body?.api_key || "").trim();
+  const apiSecret = String(req.body?.api_secret || "").trim();
 
-    const shopDomain = normalizeShopDomain(rawShop);
-    if (!shopDomain.endsWith(".myshopify.com")) {
-      return res.status(400).json({ error: "Invalid Shopify domain" });
-    }
+  if (!rawShop || !apiKey || !apiSecret) {
+    return res
+      .status(400)
+      .json({ error: "shop, api_key and api_secret are required" });
+  }
 
-    try {
-      logger.info("Shopify connect requested", {
-        route: "/api/app/shopify/connect",
-        store_id: storeId,
-        shop_domain: shopDomain,
-      });
+  const shopDomain = normalizeShopDomain(rawShop);
+  if (!shopDomain.endsWith(".myshopify.com")) {
+    return res.status(400).json({ error: "Invalid Shopify domain" });
+  }
 
-      // Save credentials to brands table
-      await upsertLegacyBrandForStore({
-        storeId,
-        shopDomain,
-        apiKey,
-        apiSecret,
-      });
+  try {
+    logger.info("Shopify connect requested", {
+      route: "/api/app/shopify/connect",
+      store_id: storeId,
+      shop_domain: shopDomain,
+    });
 
-      // Create OAuth state
-      const state = crypto.randomBytes(32).toString("hex");
-      const scopes =
-        "read_products,write_products,read_inventory,write_inventory,read_orders,read_customers,read_locations";
+    // Save credentials to brands table
+    await upsertLegacyBrandForStore({
+      storeId,
+      shopDomain,
+      apiKey,
+      apiSecret,
+    });
 
-      const stateInsert = await supabase.from("shopify_oauth_states").insert({
-        state,
-        shop: shopDomain,
-        brand_id: storeId,
-        user_id: req.user?.id || null,
-        api_key: apiKey,
-        api_secret: apiSecret,
-        expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-        created_at: nowIso(),
-      });
+    // Create OAuth state
+    const state = crypto.randomBytes(32).toString("hex");
+    const scopes =
+      "read_products,write_products,read_inventory,write_inventory,read_orders,read_customers,read_locations";
 
-      if (stateInsert.error) {
-        logger.warn(
-          "Failed to create OAuth state in app route, trying compatibility install-url route",
+    const stateInsert = await supabase.from("shopify_oauth_states").insert({
+      state,
+      shop: shopDomain,
+      brand_id: storeId,
+      user_id: req.user?.id || null,
+      api_key: apiKey,
+      api_secret: apiSecret,
+      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      created_at: nowIso(),
+    });
+
+    if (stateInsert.error) {
+      logger.warn(
+        "Failed to create OAuth state in app route, trying compatibility install-url route",
+        {
+          route: "/api/app/shopify/connect",
+          store_id: storeId,
+          shop_domain: shopDomain,
+          error: stateInsert.error.message,
+        },
+      );
+
+      try {
+        const baseUrl = resolveBackendUrl(req);
+        const legacyResponse = await axios.post(
+          `${baseUrl}/api/shopify/get-install-url`,
           {
-            route: "/api/app/shopify/connect",
-            store_id: storeId,
-            shop_domain: shopDomain,
-            error: stateInsert.error.message,
+            shop: shopDomain,
+            api_key: apiKey,
+            api_secret: apiSecret,
+            brand_id: storeId,
+          },
+          {
+            headers: {
+              Authorization: String(req.headers.authorization || ""),
+              "Content-Type": "application/json",
+            },
+            timeout: 15000,
           },
         );
 
-        try {
-          const baseUrl = resolveBackendUrl(req);
-          const legacyResponse = await axios.post(
-            `${baseUrl}/api/shopify/get-install-url`,
-            {
-              shop: shopDomain,
-              api_key: apiKey,
-              api_secret: apiSecret,
-              brand_id: storeId,
-            },
-            {
-              headers: {
-                Authorization: String(req.headers.authorization || ""),
-                "Content-Type": "application/json",
-              },
-              timeout: 15000,
-            },
-          );
-
-          const installUrl = String(legacyResponse.data?.installUrl || "");
-          if (installUrl) {
-            return res.status(201).json({
-              install_url: installUrl,
-              state: legacyResponse.data?.state || state,
-              shop: shopDomain,
-              fallback: "legacy_get_install_url",
-            });
-          }
-        } catch (legacyError: any) {
-          logger.error("Compatibility install-url fallback failed", {
-            route: "/api/app/shopify/connect",
-            store_id: storeId,
-            shop_domain: shopDomain,
-            failure_code: legacyError?.code || null,
-            error: legacyError?.message,
+        const installUrl = String(legacyResponse.data?.installUrl || "");
+        if (installUrl) {
+          return res.status(201).json({
+            install_url: installUrl,
+            state: legacyResponse.data?.state || state,
+            shop: shopDomain,
+            fallback: "legacy_get_install_url",
           });
         }
-
-        throw new Error(
-          `Failed to create OAuth state: ${stateInsert.error.message}`,
-        );
-      }
-
-      // Update shopify_connections
-      await supabase.from("shopify_connections").upsert(
-        {
+      } catch (legacyError: any) {
+        logger.error("Compatibility install-url fallback failed", {
+          route: "/api/app/shopify/connect",
           store_id: storeId,
           shop_domain: shopDomain,
-          access_token_encrypted: "",
-          scopes,
-          status: "disconnected",
-          updated_at: nowIso(),
-        },
-        { onConflict: "store_id" },
+          failure_code: legacyError?.code || null,
+          error: legacyError?.message,
+        });
+      }
+
+      throw new Error(
+        `Failed to create OAuth state: ${stateInsert.error.message}`,
       );
+    }
 
-      // Build install URL
-      const backendUrl = resolveBackendUrl(req);
-      const redirectUri = `${backendUrl}/api/shopify/callback`;
-      const installUrl =
-        `https://${shopDomain}/admin/oauth/authorize?` +
-        `client_id=${encodeURIComponent(apiKey)}&` +
-        `scope=${encodeURIComponent(scopes)}&` +
-        `redirect_uri=${encodeURIComponent(redirectUri)}&` +
-        `state=${encodeURIComponent(state)}`;
-
-      logger.info("Shopify OAuth flow started", {
-        route: "/api/app/shopify/connect",
+    // Update shopify_connections
+    await supabase.from("shopify_connections").upsert(
+      {
         store_id: storeId,
         shop_domain: shopDomain,
-        state,
-      });
+        access_token_encrypted: "",
+        scopes,
+        status: "disconnected",
+        updated_at: nowIso(),
+      },
+      { onConflict: "store_id" },
+    );
 
-      return res.status(201).json({
-        install_url: installUrl,
-        state,
-        shop: shopDomain,
-      });
-    } catch (error: any) {
-      const failureCode = String(error?.code || "shopify_connect_failed");
-      logger.error("App shopify connect failed", {
-        error: error?.message,
-        failure_code: failureCode,
+    // Build install URL
+    const backendUrl = resolveBackendUrl(req);
+    const redirectUri = `${backendUrl}/api/shopify/callback`;
+    const installUrl =
+      `https://${shopDomain}/admin/oauth/authorize?` +
+      `client_id=${encodeURIComponent(apiKey)}&` +
+      `scope=${encodeURIComponent(scopes)}&` +
+      `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+      `state=${encodeURIComponent(state)}`;
+
+    logger.info("Shopify OAuth flow started", {
+      route: "/api/app/shopify/connect",
+      store_id: storeId,
+      shop_domain: shopDomain,
+      state,
+    });
+
+    return res.status(201).json({
+      install_url: installUrl,
+      state,
+      shop: shopDomain,
+    });
+  } catch (error: any) {
+    const failureCode = String(error?.code || "shopify_connect_failed");
+    logger.error("App shopify connect failed", {
+      error: error?.message,
+      failure_code: failureCode,
+      details: error?.details,
+      hint: error?.hint,
+      store_id: storeId,
+      shop_domain: shopDomain,
+    });
+
+    // Handle duplicate key error (brand already exists)
+    if (error?.code === "23505") {
+      return res.status(409).json({
+        error:
+          "This Shopify store is already connected. Please disconnect first or use a different store.",
+        code: "duplicate_shop_domain",
         details: error?.details,
-        hint: error?.hint,
-        store_id: storeId,
-        shop_domain: shopDomain,
-      });
-
-      // Handle duplicate key error (brand already exists)
-      if (error?.code === "23505") {
-        return res.status(409).json({
-          error:
-            "This Shopify store is already connected. Please disconnect first or use a different store.",
-          code: "duplicate_shop_domain",
-          details: error?.details,
-        });
-      }
-
-      // Handle other database errors
-      if (error?.code && error?.code.startsWith("23")) {
-        return res.status(500).json({
-          error:
-            "Database error occurred. Please try again or contact support.",
-          code: error?.code,
-        });
-      }
-
-      // Handle schema compatibility errors
-      if (isSchemaCompatibilityError(error)) {
-        return res.status(500).json({
-          error: "Database schema is not compatible. Please run migration 019.",
-          code: "schema_incompatible",
-        });
-      }
-
-      // Generic error
-      return res.status(500).json({
-        error: error?.message || "Failed to start Shopify OAuth flow",
-        code: "shopify_connect_failed",
       });
     }
-  },
-);
+
+    // Handle other database errors
+    if (error?.code && error?.code.startsWith("23")) {
+      return res.status(500).json({
+        error: "Database error occurred. Please try again or contact support.",
+        code: error?.code,
+      });
+    }
+
+    // Handle schema compatibility errors
+    if (isSchemaCompatibilityError(error)) {
+      return res.status(500).json({
+        error: "Database schema is not compatible. Please run migration 019.",
+        code: "schema_incompatible",
+      });
+    }
+
+    // Generic error
+    return res.status(500).json({
+      error: error?.message || "Failed to start Shopify OAuth flow",
+      code: "shopify_connect_failed",
+    });
+  }
+});
 
 router.post(
   "/shopify/sync/full",
@@ -2336,8 +2356,11 @@ router.get("/notifications", async (req: AuthRequest, res: Response) => {
 router.get(
   "/notifications/unread-count",
   async (req: AuthRequest, res: Response) => {
-    const storeId = ensureStoreId(req, res);
-    if (!storeId) return;
+    // Allow without store - return 0
+    const storeId = resolveStoreId(req);
+    if (!storeId) {
+      return res.json({ unread_count: 0 });
+    }
 
     try {
       let result = await supabase
@@ -2354,9 +2377,9 @@ router.get(
           .eq("read", false);
       }
       if (result.error) throw result.error;
-      return res.json({ count: result.count || 0 });
+      return res.json({ unread_count: result.count || 0 });
     } catch (error: any) {
-      logger.error("App notifications unread-count failed", {
+      logger.error("App notifications unread count failed", {
         error: error?.message,
       });
       return res.status(500).json({ error: "Failed to load unread count" });

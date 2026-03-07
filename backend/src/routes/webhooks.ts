@@ -235,13 +235,6 @@ router.post(
       return res.status(400).json({ error: "Invalid JSON body" });
     }
 
-    const webhookId =
-      webhookIdHeader ||
-      crypto
-        .createHash("sha256")
-        .update(`${topic}:${shopDomain}:${rawBody.toString("utf8")}`)
-        .digest("hex");
-
     await insertWebhookEvent({
       storeId,
       topic,
