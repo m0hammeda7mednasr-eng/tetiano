@@ -20,9 +20,9 @@ ALTER COLUMN id SET DEFAULT gen_random_uuid();
 -- 3. الآن أنشئ store (هيشتغل بدون مشاكل)
 -- ═══════════════════════════════════════════════════════════════════════════════
 
-INSERT INTO stores (name, created_at, updated_at)
-VALUES ('متجر تيتيانو', NOW(), NOW())
-RETURNING id, name;
+INSERT INTO stores (name, slug, created_at, updated_at)
+VALUES ('متجر تيتيانو', 'tetiano-store', NOW(), NOW())
+RETURNING id, name, slug;
 
 -- انسخ الـ ID اللي ظهر
 
