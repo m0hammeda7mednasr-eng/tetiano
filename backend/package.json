@@ -1,23 +1,32 @@
 {
   "name": "inventory-backend",
   "version": "1.0.0",
-  "description": "Multi-brand inventory management backend",
+  "description": "Inventory Management Backend API",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "nodemon --exec ts-node src/index.ts",
     "build": "tsc",
-    "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
-    "seed": "tsx src/scripts/seed.ts",
-    "lint": "eslint src --ext .ts"
+    "test": "ts-node tests/integration.test.ts",
+    "test:webhooks": "ts-node tests/shopify-webhook.test.ts",
+    "test:all": "npm run test && npm run test:webhooks",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\""
   },
+  "keywords": [
+    "inventory",
+    "shopify",
+    "api"
+  ],
+  "author": "",
+  "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
     "axios": "^1.6.2",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "express-rate-limit": "^8.3.0",
+    "express-rate-limit": "^7.1.5",
     "node-cron": "^3.0.3",
     "winston": "^3.11.0"
   },
@@ -29,7 +38,9 @@
     "@typescript-eslint/eslint-plugin": "^6.15.0",
     "@typescript-eslint/parser": "^6.15.0",
     "eslint": "^8.56.0",
-    "tsx": "^4.7.0",
+    "nodemon": "^3.0.2",
+    "prettier": "^3.1.1",
+    "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
   }
 }
