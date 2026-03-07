@@ -9,9 +9,11 @@ import {
   requireStoreRole,
 } from "../middleware/auth";
 import { supabase } from "../config/supabase";
+import { getShopifyConfig } from "../config/shopify";
 import { logger } from "../utils/logger";
 import { assertStoreScope, isSchemaCompatibilityError, resolveStoreId } from "../utils/storeContext";
 import { InventoryService } from "../services/inventory";
+import { ShopifyService } from "../services/shopify";
 import { ShopifySyncService } from "../services/shopifySync";
 import { logAuditEvent } from "../utils/auditLogger";
 
@@ -212,6 +214,84 @@ function canViewFinance(req: AuthRequest): boolean {
   if (req.user?.permissions?.["finance.view_profit"]) return true;
   if (req.user?.permissions?.can_view_finance) return true;
   return false;
+}
+
+async function getStoreBrandConfigOrThrow(storeId: string) {
+  const brand = await supabase
+    .from("brands")
+    .select("id, name, shopify_domain, shopify_access_token, access_token, shopify_location_id")
+    .eq("id", storeId)
+    .maybeSingle();
+
+  if (brand.error) throw brand.error;
+  if (!brand.data) {
+    throw new Error("Store Shopify configuration is missing");
+  }
+  return brand.data as Record<string, unknown>;
+}
+
+function buildShopifyServiceFromBrand(brand: Record<string, unknown>): ShopifyService {
+  const shopifyConfig = getShopifyConfig(String(brand.name || "store"), {
+    domain: String(brand.shopify_domain || ""),
+    accessToken: String(brand.shopify_access_token || ""),
+    legacyAccessToken: String(brand.access_token || ""),
+    locationId: String(brand.shopify_location_id || ""),
+  });
+  return new ShopifyService(shopifyConfig);
+}
+
+async function syncProductDetailsToShopify(params: {
+  storeId: string;
+  shopifyProductId: string;
+  updates: {
+    title?: string | null;
+    vendor?: string | null;
+    product_type?: string | null;
+    status?: string | null;
+  };
+}) {
+  const hasSyncableFields =
+    params.updates.title !== undefined ||
+    params.updates.vendor !== undefined ||
+    params.updates.product_type !== undefined ||
+    params.updates.status !== undefined;
+  if (!hasSyncableFields) return;
+
+  const brand = await getStoreBrandConfigOrThrow(params.storeId);
+  const shopifyService = buildShopifyServiceFromBrand(brand);
+  await shopifyService.updateProduct(params.shopifyProductId, {
+    title: params.updates.title,
+    vendor: params.updates.vendor,
+    productType: params.updates.product_type,
+    status: params.updates.status,
+  });
+}
+
+async function syncVariantDetailsToShopify(params: {
+  storeId: string;
+  shopifyVariantId: string;
+  updates: {
+    sku?: string | null;
+    barcode?: string | null;
+    price?: number | null;
+    compare_at_price?: number | null;
+  };
+}) {
+  const hasSyncableFields =
+    params.updates.sku !== undefined ||
+    params.updates.barcode !== undefined ||
+    params.updates.price !== undefined ||
+    params.updates.compare_at_price !== undefined;
+  if (!hasSyncableFields) return;
+
+  const brand = await getStoreBrandConfigOrThrow(params.storeId);
+  const shopifyService = buildShopifyServiceFromBrand(brand);
+  await shopifyService.updateVariant(params.shopifyVariantId, {
+    sku: params.updates.sku,
+    barcode: params.updates.barcode,
+    price: params.updates.price,
+    compareAtPrice: params.updates.compare_at_price,
+  });
 }
 
 function trimTrailingSlash(input: string): string {
@@ -518,14 +598,14 @@ router.patch("/products/:id", requireStorePermission("products.manage"), async (
   try {
     let before = await supabase
       .from("products")
-      .select("id, store_id, brand_id, title, vendor, product_type, status")
+      .select("*")
       .eq("id", productId)
       .eq("store_id", storeId)
       .maybeSingle();
     if (before.error && isSchemaCompatibilityError(before.error)) {
       before = await supabase
         .from("products")
-        .select("id, store_id, brand_id, title, vendor, product_type, status")
+        .select("*")
         .eq("id", productId)
         .eq("brand_id", storeId)
         .maybeSingle();
@@ -536,6 +616,34 @@ router.patch("/products/:id", requireStorePermission("products.manage"), async (
     const rowStoreId = String((before.data as any).store_id || (before.data as any).brand_id || "");
     if (!assertStoreScope(req, rowStoreId)) {
       return res.status(403).json({ error: "Cross-store access is forbidden" });
+    }
+
+    const shopifyProductId = String((before.data as any).shopify_product_id || "").trim();
+    if (shopifyProductId) {
+      try {
+        await syncProductDetailsToShopify({
+          storeId,
+          shopifyProductId,
+          updates: {
+            title: req.body?.title,
+            vendor: req.body?.vendor,
+            product_type: req.body?.product_type,
+            status: req.body?.status,
+          },
+        });
+      } catch (syncError: any) {
+        logger.error("App product update sync to Shopify failed", {
+          productId,
+          storeId,
+          shopifyProductId,
+          error: syncError?.message,
+          details: syncError?.response?.data,
+        });
+        return res.status(502).json({
+          error: "Failed to sync product update to Shopify",
+          code: "shopify_product_update_failed",
+        });
+      }
     }
 
     let update = await supabase
@@ -554,7 +662,7 @@ router.patch("/products/:id", requireStorePermission("products.manage"), async (
 
     const after = await supabase
       .from("products")
-      .select("id, store_id, brand_id, title, vendor, product_type, status")
+      .select("*")
       .eq("id", productId)
       .maybeSingle();
     if (after.error) throw after.error;
@@ -573,6 +681,150 @@ router.patch("/products/:id", requireStorePermission("products.manage"), async (
   } catch (error: any) {
     logger.error("App product update failed", { error: error?.message, productId });
     return res.status(500).json({ error: "Failed to update product" });
+  }
+});
+
+router.patch("/variants/:id", requireStorePermission("products.manage"), async (req: AuthRequest, res: Response) => {
+  const storeId = ensureStoreId(req, res);
+  if (!storeId) return;
+
+  const variantId = req.params.id;
+  const hasPrice = Object.prototype.hasOwnProperty.call(req.body || {}, "price");
+  const hasCompareAtPrice = Object.prototype.hasOwnProperty.call(req.body || {}, "compare_at_price");
+
+  let parsedPrice: number | null | undefined = undefined;
+  if (hasPrice) {
+    const raw = req.body?.price;
+    if (raw === null || raw === "") {
+      parsedPrice = null;
+    } else {
+      const value = Number(raw);
+      if (!Number.isFinite(value)) {
+        return res.status(400).json({ error: "price must be a valid number" });
+      }
+      parsedPrice = value;
+    }
+  }
+
+  let parsedCompareAtPrice: number | null | undefined = undefined;
+  if (hasCompareAtPrice) {
+    const raw = req.body?.compare_at_price;
+    if (raw === null || raw === "") {
+      parsedCompareAtPrice = null;
+    } else {
+      const value = Number(raw);
+      if (!Number.isFinite(value)) {
+        return res.status(400).json({ error: "compare_at_price must be a valid number" });
+      }
+      parsedCompareAtPrice = value;
+    }
+  }
+
+  const updates = {
+    sku: req.body?.sku,
+    barcode: req.body?.barcode,
+    price: parsedPrice,
+    compare_at_price: parsedCompareAtPrice,
+    updated_at: nowIso(),
+  };
+  const payload = Object.fromEntries(Object.entries(updates).filter(([, value]) => value !== undefined));
+  const updatedFieldCount = Object.keys(payload).filter((key) => key !== "updated_at").length;
+
+  if (updatedFieldCount === 0) {
+    return res.status(400).json({ error: "No variant fields to update" });
+  }
+
+  try {
+    let before = await supabase
+      .from("variants")
+      .select("*")
+      .eq("id", variantId)
+      .eq("store_id", storeId)
+      .maybeSingle();
+    if (before.error && isSchemaCompatibilityError(before.error)) {
+      before = await supabase
+        .from("variants")
+        .select("*")
+        .eq("id", variantId)
+        .eq("brand_id", storeId)
+        .maybeSingle();
+    }
+    if (before.error) throw before.error;
+    if (!before.data) return res.status(404).json({ error: "Variant not found" });
+
+    const rowStoreId = String((before.data as any).store_id || (before.data as any).brand_id || "");
+    if (!assertStoreScope(req, rowStoreId)) {
+      return res.status(403).json({ error: "Cross-store access is forbidden" });
+    }
+
+    const shopifyVariantId = String((before.data as any).shopify_variant_id || "").trim();
+    if (shopifyVariantId) {
+      try {
+        await syncVariantDetailsToShopify({
+          storeId,
+          shopifyVariantId,
+          updates: {
+            sku: req.body?.sku,
+            barcode: req.body?.barcode,
+            price: parsedPrice,
+            compare_at_price: parsedCompareAtPrice,
+          },
+        });
+      } catch (syncError: any) {
+        logger.error("App variant update sync to Shopify failed", {
+          variantId,
+          storeId,
+          shopifyVariantId,
+          error: syncError?.message,
+          details: syncError?.response?.data,
+        });
+        return res.status(502).json({
+          error: "Failed to sync variant update to Shopify",
+          code: "shopify_variant_update_failed",
+        });
+      }
+    }
+
+    let update = await supabase
+      .from("variants")
+      .update(payload)
+      .eq("id", variantId)
+      .eq("store_id", storeId);
+
+    if (update.error && isSchemaCompatibilityError(update.error)) {
+      const fallbackPayload = { ...payload } as Record<string, unknown>;
+      delete fallbackPayload.compare_at_price;
+
+      update = await supabase
+        .from("variants")
+        .update(fallbackPayload)
+        .eq("id", variantId)
+        .eq("brand_id", storeId);
+    }
+
+    if (update.error) throw update.error;
+
+    const after = await supabase
+      .from("variants")
+      .select("*")
+      .eq("id", variantId)
+      .maybeSingle();
+    if (after.error) throw after.error;
+
+    await logAuditEvent({
+      userId: req.user?.id,
+      storeId,
+      action: "app.variant.update",
+      tableName: "variants",
+      recordId: variantId,
+      before: before.data,
+      after: after.data || payload,
+    });
+
+    return res.json({ success: true, variant: after.data || null });
+  } catch (error: any) {
+    logger.error("App variant update failed", { error: error?.message, variantId });
+    return res.status(500).json({ error: "Failed to update variant" });
   }
 });
 

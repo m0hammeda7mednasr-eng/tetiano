@@ -132,6 +132,107 @@ export class ShopifyService {
     logger.info('Inventory set', { inventoryItemId, available });
   }
 
+  // Update product core details in Shopify
+  async updateProduct(
+    productId: string,
+    updates: {
+      title?: string | null;
+      vendor?: string | null;
+      productType?: string | null;
+      status?: string | null;
+    }
+  ): Promise<void> {
+    const productPayload: Record<string, unknown> = {
+      id: productId,
+    };
+
+    if (updates.title !== undefined) {
+      productPayload.title = updates.title ?? '';
+    }
+    if (updates.vendor !== undefined) {
+      productPayload.vendor = updates.vendor ?? '';
+    }
+    if (updates.productType !== undefined) {
+      productPayload.product_type = updates.productType ?? '';
+    }
+    if (updates.status !== undefined) {
+      const normalized = String(updates.status || '').trim().toLowerCase();
+      if (['active', 'draft', 'archived'].includes(normalized)) {
+        productPayload.status = normalized;
+      }
+    }
+
+    if (Object.keys(productPayload).length <= 1) {
+      return;
+    }
+
+    try {
+      await this.client.put(`/products/${productId}.json`, {
+        product: productPayload,
+      });
+      logger.info('Shopify product updated', {
+        productId,
+        fields: Object.keys(productPayload).filter((key) => key !== 'id'),
+      });
+    } catch (error: any) {
+      logger.error('Shopify product update failed', {
+        productId,
+        updates,
+        error: error?.response?.data || error?.message,
+      });
+      throw error;
+    }
+  }
+
+  // Update variant details in Shopify
+  async updateVariant(
+    variantId: string,
+    updates: {
+      sku?: string | null;
+      barcode?: string | null;
+      price?: number | null;
+      compareAtPrice?: number | null;
+    }
+  ): Promise<void> {
+    const variantPayload: Record<string, unknown> = {
+      id: variantId,
+    };
+
+    if (updates.sku !== undefined) {
+      variantPayload.sku = updates.sku ?? '';
+    }
+    if (updates.barcode !== undefined) {
+      variantPayload.barcode = updates.barcode ?? '';
+    }
+    if (updates.price !== undefined) {
+      variantPayload.price = updates.price;
+    }
+    if (updates.compareAtPrice !== undefined) {
+      variantPayload.compare_at_price = updates.compareAtPrice;
+    }
+
+    if (Object.keys(variantPayload).length <= 1) {
+      return;
+    }
+
+    try {
+      await this.client.put(`/variants/${variantId}.json`, {
+        variant: variantPayload,
+      });
+      logger.info('Shopify variant updated', {
+        variantId,
+        fields: Object.keys(variantPayload).filter((key) => key !== 'id'),
+      });
+    } catch (error: any) {
+      logger.error('Shopify variant update failed', {
+        variantId,
+        updates,
+        error: error?.response?.data || error?.message,
+      });
+      throw error;
+    }
+  }
+
   // Get product with variants
   async getProduct(productId: string) {
     const query = `
