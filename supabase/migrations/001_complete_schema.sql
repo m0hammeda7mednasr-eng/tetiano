@@ -443,3 +443,224 @@ BEGIN
     RAISE EXCEPTION '❌ Migration 001 failed - only % tables created', table_count;
   END IF;
 END $$;
+
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 21. VARIANTS TABLE (Product Variants)
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS variants (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+  product_id UUID REFERENCES products(id) ON DELETE CASCADE,
+  sku VARCHAR(255) NOT NULL,
+  title VARCHAR(500),
+  price DECIMAL(10, 2),
+  compare_at_price DECIMAL(10, 2),
+  cost_price DECIMAL(10, 2),
+  shopify_variant_id BIGINT UNIQUE,
+  shopify_product_id BIGINT,
+  inventory_quantity INTEGER DEFAULT 0,
+  weight DECIMAL(10, 2),
+  weight_unit VARCHAR(10),
+  requires_shipping BOOLEAN DEFAULT TRUE,
+  taxable BOOLEAN DEFAULT TRUE,
+  barcode VARCHAR(255),
+  image_url TEXT,
+  position INTEGER,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(store_id, sku)
+);
+
+CREATE INDEX IF NOT EXISTS idx_variants_store_id ON variants(store_id);
+CREATE INDEX IF NOT EXISTS idx_variants_product_id ON variants(product_id);
+CREATE INDEX IF NOT EXISTS idx_variants_sku ON variants(sku);
+CREATE INDEX IF NOT EXISTS idx_variants_shopify_variant_id ON variants(shopify_variant_id);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 22. INVENTORY LEVELS TABLE
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS inventory_levels (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+  variant_id UUID NOT NULL REFERENCES variants(id) ON DELETE CASCADE,
+  location_id VARCHAR(255),
+  available INTEGER DEFAULT 0,
+  on_hand INTEGER DEFAULT 0,
+  committed INTEGER DEFAULT 0,
+  incoming INTEGER DEFAULT 0,
+  last_synced_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(store_id, variant_id, location_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_levels_store_id ON inventory_levels(store_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_levels_variant_id ON inventory_levels(variant_id);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 23. SHOPIFY CUSTOMERS TABLE
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS shopify_customers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+  shopify_customer_id BIGINT NOT NULL UNIQUE,
+  email VARCHAR(255),
+  first_name VARCHAR(255),
+  last_name VARCHAR(255),
+  phone VARCHAR(50),
+  total_spent DECIMAL(10, 2),
+  orders_count INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shopify_customers_store_id ON shopify_customers(store_id);
+CREATE INDEX IF NOT EXISTS idx_shopify_customers_email ON shopify_customers(email);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 24. SHOPIFY ORDERS TABLE
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS shopify_orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+  shopify_order_id BIGINT NOT NULL UNIQUE,
+  order_number VARCHAR(255),
+  customer_id UUID REFERENCES shopify_customers(id) ON DELETE SET NULL,
+  email VARCHAR(255),
+  total_price DECIMAL(10, 2),
+  subtotal_price DECIMAL(10, 2),
+  total_tax DECIMAL(10, 2),
+  currency VARCHAR(10),
+  financial_status VARCHAR(50),
+  fulfillment_status VARCHAR(50),
+  order_status_url TEXT,
+  processed_at TIMESTAMPTZ,
+  cancelled_at TIMESTAMPTZ,
+  cancel_reason VARCHAR(255),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shopify_orders_store_id ON shopify_orders(store_id);
+CREATE INDEX IF NOT EXISTS idx_shopify_orders_customer_id ON shopify_orders(customer_id);
+CREATE INDEX IF NOT EXISTS idx_shopify_orders_financial_status ON shopify_orders(financial_status);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 25. SHOPIFY ORDER ITEMS TABLE
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS shopify_order_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES shopify_orders(id) ON DELETE CASCADE,
+  variant_id UUID REFERENCES variants(id) ON DELETE SET NULL,
+  shopify_line_item_id BIGINT,
+  title VARCHAR(500),
+  quantity INTEGER NOT NULL,
+  price DECIMAL(10, 2),
+  total_discount DECIMAL(10, 2),
+  sku VARCHAR(255),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shopify_order_items_order_id ON shopify_order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_shopify_order_items_variant_id ON shopify_order_items(variant_id);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 26. SHOPIFY WEBHOOK EVENTS TABLE
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS shopify_webhook_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_id UUID REFERENCES stores(id) ON DELETE CASCADE,
+  topic VARCHAR(100) NOT NULL,
+  shopify_id BIGINT,
+  payload JSONB NOT NULL,
+  processed BOOLEAN DEFAULT FALSE,
+  processed_at TIMESTAMPTZ,
+  error_message TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shopify_webhook_events_store_id ON shopify_webhook_events(store_id);
+CREATE INDEX IF NOT EXISTS idx_shopify_webhook_events_topic ON shopify_webhook_events(topic);
+CREATE INDEX IF NOT EXISTS idx_shopify_webhook_events_processed ON shopify_webhook_events(processed);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 27. REPORTS TABLE
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS reports (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+  report_type VARCHAR(50) NOT NULL,
+  report_date DATE NOT NULL,
+  data JSONB NOT NULL,
+  created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(store_id, report_type, report_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reports_store_id ON reports(store_id);
+CREATE INDEX IF NOT EXISTS idx_reports_date ON reports(report_date DESC);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 28. UPDATE TRIGGERS FOR NEW TABLES
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TRIGGER update_variants_updated_at BEFORE UPDATE ON variants FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_inventory_levels_updated_at BEFORE UPDATE ON inventory_levels FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_shopify_customers_updated_at BEFORE UPDATE ON shopify_customers FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_shopify_orders_updated_at BEFORE UPDATE ON shopify_orders FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 29. RLS POLICIES FOR NEW TABLES
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+ALTER TABLE variants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory_levels ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shopify_customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shopify_orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shopify_order_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shopify_webhook_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reports ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role bypass" ON variants FOR ALL USING (auth.role() = 'service_role');
+CREATE POLICY "Service role bypass" ON inventory_levels FOR ALL USING (auth.role() = 'service_role');
+CREATE POLICY "Service role bypass" ON shopify_customers FOR ALL USING (auth.role() = 'service_role');
+CREATE POLICY "Service role bypass" ON shopify_orders FOR ALL USING (auth.role() = 'service_role');
+CREATE POLICY "Service role bypass" ON shopify_order_items FOR ALL USING (auth.role() = 'service_role');
+CREATE POLICY "Service role bypass" ON shopify_webhook_events FOR ALL USING (auth.role() = 'service_role');
+CREATE POLICY "Service role bypass" ON reports FOR ALL USING (auth.role() = 'service_role');
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- ✅ MIGRATION COMPLETE - ALL TABLES CREATED!
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+-- Final verification
+DO $$
+DECLARE
+  table_count INTEGER;
+BEGIN
+  SELECT COUNT(*) INTO table_count
+  FROM information_schema.tables
+  WHERE table_schema = 'public'
+  AND table_name IN (
+    'stores', 'user_profiles', 'store_memberships', 'store_permissions_overrides',
+    'brands', 'shopify_oauth_states', 'shopify_connections', 'shopify_sync_runs', 'shopify_webhooks',
+    'products', 'variants', 'inventory', 'inventory_levels', 'stock_movements',
+    'orders', 'order_items', 'shopify_customers', 'shopify_orders', 'shopify_order_items',
+    'shopify_webhook_events', 'daily_reports', 'report_submissions', 'reports',
+    'audit_logs', 'notifications'
+  );
+  
+  IF table_count >= 25 THEN
+    RAISE NOTICE '✅ Migration 001 completed successfully - % tables created', table_count;
+  ELSE
+    RAISE EXCEPTION '❌ Migration 001 incomplete - only % tables created (expected 25+)', table_count;
+  END IF;
+END $$;
