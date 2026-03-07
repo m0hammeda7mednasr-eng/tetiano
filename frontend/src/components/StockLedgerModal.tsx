@@ -35,7 +35,7 @@ export default function StockLedgerModal({ variant, onClose }: Props) {
       .then(({ data }) => setMovements(data.movements || []))
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, []);
+    }, [variant.id]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center px-4 py-8 overflow-y-auto scroll-thin" dir="rtl">

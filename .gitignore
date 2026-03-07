@@ -1,37 +1,23 @@
-# ═══════════════════════════════════════════════════════════
-# Tetiano Inventory System - Git Ignore
-# ═══════════════════════════════════════════════════════════
-
-# ═══════════════════════════════════════════════════════════
 # Dependencies
-# ═══════════════════════════════════════════════════════════
 node_modules/
 .pnp
 .pnp.js
-package-lock.json
+
+# Lockfiles
+backend/package-lock.json
+frontend/package-lock.json
 yarn.lock
 pnpm-lock.yaml
 
-# ═══════════════════════════════════════════════════════════
-# Testing
-# ═══════════════════════════════════════════════════════════
-coverage/
-.nyc_output/
-*.test.js.snap
-
-# ═══════════════════════════════════════════════════════════
-# Production Builds
-# ═══════════════════════════════════════════════════════════
-build/
+# Build outputs
 dist/
+build/
 out/
 .next/
 .vercel/
 .railway/
 
-# ═══════════════════════════════════════════════════════════
-# Environment Variables (CRITICAL - NEVER COMMIT!)
-# ═══════════════════════════════════════════════════════════
+# Environment files
 .env
 .env.local
 .env.development
@@ -41,89 +27,45 @@ out/
 .env.production
 .env.production.local
 .env.*.local
-
-# Backend environment
 backend/.env
 backend/.env.local
 backend/.env.production
-
-# Frontend environment
 frontend/.env
 frontend/.env.local
 frontend/.env.production
-
-# ⚠️ IMPORTANT: .env.example files SHOULD be committed
-# They serve as templates without sensitive data
 !.env.example
 !backend/.env.example
 !frontend/.env.example
 
-# ═══════════════════════════════════════════════════════════
 # Logs
-# ═══════════════════════════════════════════════════════════
 logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-lerna-debug.log*
-.pnpm-debug.log
 
-# ═══════════════════════════════════════════════════════════
-# Editor & IDE
-# ═══════════════════════════════════════════════════════════
-# VSCode
+# Coverage / cache
+coverage/
+.nyc_output/
+.cache/
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+
+# Editors / OS
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
-
-# JetBrains IDEs
 .idea/
 *.iml
-*.iws
-*.ipr
-
-# Sublime Text
-*.sublime-project
-*.sublime-workspace
-
-# ═══════════════════════════════════════════════════════════
-# Operating System
-# ═══════════════════════════════════════════════════════════
-# macOS
 .DS_Store
-.AppleDouble
-.LSOverride
-._*
-
-# Windows
 Thumbs.db
-Thumbs.db:encryptable
-ehthumbs.db
-ehthumbs_vista.db
-*.stackdump
-[Dd]esktop.ini
-$RECYCLE.BIN/
-*.lnk
+Desktop.ini
 
-# Linux
-*~
-.directory
-.Trash-*
-
-# ═══════════════════════════════════════════════════════════
-# TypeScript
-# ═══════════════════════════════════════════════════════════
-*.tsbuildinfo
-.tsbuildinfo
-
-# ═══════════════════════════════════════════════════════════
-# Temporary Files
-# ═══════════════════════════════════════════════════════════
-.cache/
+# Temp
 .temp/
 .tmp/
 *.tmp
@@ -132,49 +74,14 @@ $RECYCLE.BIN/
 *.swo
 *~
 
-# ═══════════════════════════════════════════════════════════
-# Database
-# ═══════════════════════════════════════════════════════════
+# Databases / local secrets
 *.sqlite
 *.sqlite3
 *.db
-
-# ═══════════════════════════════════════════════════════════
-# Secrets & Credentials (CRITICAL - NEVER COMMIT!)
-# ═══════════════════════════════════════════════════════════
 secrets/
 credentials/
 *.pem
 *.key
-*.cert
 *.crt
 *.p12
 *.pfx
-.secrets
-.credentials
-
-# Supabase service keys
-*service_role_key*
-*service-role-key*
-
-# Shopify credentials
-*shopify_access_token*
-*shopify-access-token*
-
-# ═══════════════════════════════════════════════════════════
-# Documentation (Keep these - they're important!)
-# ═══════════════════════════════════════════════════════════
-# All .md files should be committed
-# !*.md
-# !docs/**/*.md
-
-# ═══════════════════════════════════════════════════════════
-# Misc
-# ═══════════════════════════════════════════════════════════
-.eslintcache
-.stylelintcache
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?

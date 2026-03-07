@@ -1,21 +1,22 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { useAuthStore } from "./store/authStore";
 import Layout from "./components/Layout";
 import ToastContainer from "./components/ToastContainer";
 import Dashboard from "./pages/Dashboard";
 import Inventory from "./pages/Inventory";
 import DailyReports from "./pages/DailyReports";
-import Settings from "./pages/Settings";
 import Orders from "./pages/Orders";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
-import AdminDashboard from "./pages/admin/AdminDashboard";
-import UserManagement from "./pages/admin/UserManagement";
-import ShopifyGuide from "./pages/ShopifyGuide";
 import ShopifyCallbackPage from "./pages/ShopifyCallbackPage";
 import NotFound from "./pages/NotFound";
 import { Zap } from "lucide-react";
+
+const Settings = lazy(() => import("./pages/Settings"));
+const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"));
+const UserManagement = lazy(() => import("./pages/admin/UserManagement"));
+const ShopifyGuide = lazy(() => import("./pages/ShopifyGuide"));
 
 // ── Loading screen ───────────────────────────────────────
 function LoadingScreen() {
@@ -37,11 +38,7 @@ function LoadingScreen() {
 
 // ── Protected route ──────────────────────────────────────
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading, initialize } = useAuthStore();
-
-  useEffect(() => {
-    initialize();
-  }, [initialize]);
+  const { user, loading } = useAuthStore();
 
   if (loading) return <LoadingScreen />;
   if (!user) return <Navigate to="/login" replace />;
@@ -51,11 +48,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 // ── Admin-only route ─────────────────────────────────────
 function AdminRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading, isAdmin, initialize } = useAuthStore();
-
-  useEffect(() => {
-    initialize();
-  }, [initialize]);
+  const { user, loading, isAdmin } = useAuthStore();
 
   if (loading) return <LoadingScreen />;
   if (!user) return <Navigate to="/login" replace />;
@@ -72,11 +65,7 @@ function PermRoute({
   children: React.ReactNode;
   perm: string;
 }) {
-  const { user, loading, hasPermission, initialize } = useAuthStore();
-
-  useEffect(() => {
-    initialize();
-  }, [initialize]);
+  const { user, loading, hasPermission } = useAuthStore();
 
   if (loading) return <LoadingScreen />;
   if (!user) return <Navigate to="/login" replace />;
@@ -106,7 +95,17 @@ function HomeRoute() {
   return <Dashboard />;
 }
 
+function LazyPage({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<LoadingScreen />}>{children}</Suspense>;
+}
+
 function App() {
+  const { initialize } = useAuthStore();
+
+  useEffect(() => {
+    initialize();
+  }, [initialize]);
+
   return (
     <BrowserRouter>
       <div dir="rtl" className="bg-white">
@@ -161,11 +160,25 @@ function App() {
             />
 
             {/* Settings */}
-            <Route path="settings" element={<Settings />} />
+            <Route
+              path="settings"
+              element={
+                <LazyPage>
+                  <Settings />
+                </LazyPage>
+              }
+            />
             <Route path="settings/brands" element={<Navigate to="/settings" replace />} />
 
             {/* Help */}
-            <Route path="shopify-guide" element={<ShopifyGuide />} />
+            <Route
+              path="shopify-guide"
+              element={
+                <LazyPage>
+                  <ShopifyGuide />
+                </LazyPage>
+              }
+            />
 
             {/* Admin Routes */}
             <Route
@@ -180,7 +193,9 @@ function App() {
               path="admin/dashboard"
               element={
                 <AdminRoute>
-                  <AdminDashboard />
+                  <LazyPage>
+                    <AdminDashboard />
+                  </LazyPage>
                 </AdminRoute>
               }
             />
@@ -188,7 +203,9 @@ function App() {
               path="admin/users"
               element={
                 <AdminRoute>
-                  <UserManagement />
+                  <LazyPage>
+                    <UserManagement />
+                  </LazyPage>
                 </AdminRoute>
               }
             />

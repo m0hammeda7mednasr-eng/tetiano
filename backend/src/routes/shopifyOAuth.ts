@@ -520,6 +520,50 @@ async function resolveBrandForOAuth(stateRow: OAuthStateRecord, shopDomain: stri
   throw new HttpError(404, "brand_not_found", "Brand not found for OAuth state");
 }
 
+async function upsertShopifyConnectionState(params: {
+  storeId: string;
+  shopDomain: string;
+  scope?: string | null;
+  status: "connected" | "disconnected";
+  connectedAt?: string | null;
+  accessToken?: string | null;
+}) {
+  const storeId = params.storeId.trim();
+  const shopDomain = params.shopDomain.trim();
+  if (!storeId || !shopDomain) {
+    return;
+  }
+
+  const payload: Record<string, unknown> = {
+    store_id: storeId,
+    shop_domain: shopDomain,
+    scopes: params.scope || "",
+    status: params.status,
+    connected_at: params.status === "connected" ? params.connectedAt || new Date().toISOString() : null,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (params.accessToken !== undefined) {
+    payload.access_token_encrypted = params.accessToken || "";
+  }
+
+  const { error } = await supabase.from("shopify_connections").upsert(payload, {
+    onConflict: "store_id",
+  });
+  if (error && !isSchemaMismatchError(error)) {
+    throw error;
+  }
+
+  if (error) {
+    logger.warn("shopify_connections sync skipped due to schema mismatch", {
+      storeId,
+      shopDomain,
+      status: params.status,
+      error: error.message,
+    });
+  }
+}
+
 async function updateBrandConnection(params: {
   brand: Record<string, unknown>;
   shopDomain: string;
@@ -549,6 +593,15 @@ async function updateBrandConnection(params: {
   if (error) {
     throw error;
   }
+
+  await upsertShopifyConnectionState({
+    storeId: String(brand.id || ""),
+    shopDomain,
+    scope: scope || "",
+    status: "connected",
+    connectedAt: updates.connected_at as string,
+    accessToken,
+  });
 }
 
 async function clearBrandConnection(brand: Record<string, unknown>) {
@@ -565,6 +618,18 @@ async function clearBrandConnection(brand: Record<string, unknown>) {
   const { error } = await supabase.from("brands").update(updates).eq("id", brand.id);
   if (error) {
     throw error;
+  }
+
+  const rawShopDomain = String(brand.shopify_domain || "").trim();
+  if (rawShopDomain) {
+    await upsertShopifyConnectionState({
+      storeId: String(brand.id || ""),
+      shopDomain: normalizeShopDomain(rawShopDomain),
+      scope: "",
+      status: "disconnected",
+      connectedAt: null,
+      accessToken: "",
+    });
   }
 }
 
@@ -913,8 +978,9 @@ async function completeOAuthCallback(params: {
   runPostConnectBootstrap(String((brand as Record<string, unknown>).id));
 
   logger.info("Shopify OAuth completed", {
-    brandId: brand.id,
-    shopDomain,
+    route: "/api/shopify/callback",
+    store_id: brand.id,
+    shop_domain: shopDomain,
   });
 
   return {
@@ -1225,7 +1291,12 @@ router.post("/callback", async (req: Request, res: Response) => {
 
     const status = error instanceof HttpError ? error.status : 500;
     const message = error instanceof HttpError ? error.message : "OAuth callback failed";
-    logger.error("POST callback failed", { error: error.message });
+    logger.error("POST callback failed", {
+      route: "/api/shopify/callback",
+      shop_domain: String(req.body?.shop || ""),
+      failure_code: error instanceof HttpError ? error.code : "oauth_failed",
+      error: error.message,
+    });
     res.status(status).json({ error: message });
   }
 });
@@ -1241,6 +1312,13 @@ router.get("/callback", async (req: Request, res: Response) => {
     const shop = String(req.query.shop || "");
     const state = String(req.query.state || "");
     const hmac = String(req.query.hmac || "");
+
+    logger.info("Shopify OAuth callback received", {
+      route: "/api/shopify/callback",
+      shop_domain: shop ? normalizeShopDomain(shop) : "",
+      has_state: Boolean(state),
+      has_code: Boolean(code),
+    });
 
     if (callbackError) {
       if (state) {
@@ -1262,6 +1340,11 @@ router.get("/callback", async (req: Request, res: Response) => {
     });
 
     const brandName = result.brandName || result.shopDomain;
+    logger.info("Shopify OAuth callback succeeded", {
+      route: "/api/shopify/callback",
+      store_id: result.brandId,
+      shop_domain: result.shopDomain,
+    });
     res.redirect(
       `${FRONTEND_URL}/settings?oauth=success&brand=${encodeURIComponent(brandName)}`,
     );
@@ -1272,7 +1355,12 @@ router.get("/callback", async (req: Request, res: Response) => {
         : error instanceof HttpError
           ? error.code
           : "oauth_failed";
-    logger.error("GET callback failed", { error: error.message, code: errorCode });
+    logger.error("GET callback failed", {
+      route: "/api/shopify/callback",
+      shop_domain: String(req.query.shop || ""),
+      failure_code: errorCode,
+      error: error.message,
+    });
     res.redirect(
       `${FRONTEND_URL}/settings?oauth=error&msg=${encodeURIComponent(errorCode)}`,
     );

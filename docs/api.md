@@ -1,241 +1,94 @@
-# API Documentation
+# API Reference
 
-Base URL: `http://localhost:3002` (development) or your deployed backend URL
+Base URL:
 
-All authenticated endpoints require `Authorization: Bearer <token>` header.
+- Local: `http://localhost:3002`
+- Production: Railway backend URL
 
-## Authentication
+Auth:
 
-Authentication is handled by Supabase. Get the access token from Supabase session.
+- Protected endpoints require `Authorization: Bearer <supabase_access_token>`.
 
-## Endpoints
+## Health
 
-### Health Check
+- `GET /health`
 
-```
-GET /health
-```
+## Primary App API (`/api/app/*`)
 
-Returns server status.
+Store-scoped business API.
 
-### Webhooks
+- `GET /api/app/me`
+- `GET /api/app/dashboard/overview`
 
-#### Shopify Webhook Handler
+Inventory and catalog:
 
-```
-POST /api/webhooks/shopify
-```
+- `GET /api/app/products`
+- `PATCH /api/app/products/:id`
+- `PATCH /api/app/variants/:id`
+- `PATCH /api/app/variants/:id/stock`
+- `GET /api/app/variants/:id/movements`
 
-Receives webhooks from Shopify. Requires valid HMAC signature.
+Commerce:
 
-Headers:
-- `X-Shopify-Hmac-Sha256`: HMAC signature
-- `X-Shopify-Topic`: Webhook topic
-- `X-Shopify-Shop-Domain`: Shop domain
+- `GET /api/app/orders`
+- `GET /api/app/orders/:id`
+- `GET /api/app/customers`
 
-### Inventory
+Reports:
 
-#### Get Inventory
+- `GET /api/app/reports`
+- `GET /api/app/reports/status/today`
+- `POST /api/app/reports`
+- `POST /api/app/reports/:id/attachments/presign`
+- `POST /api/app/reports/:id/comments`
 
-```
-GET /api/inventory
-```
+Admin users:
 
-Query parameters:
-- `brand_id` (optional): Filter by brand
-- `search` (optional): Search by SKU, title, or barcode
-- `page` (optional): Page number (default: 1)
-- `limit` (optional): Items per page (default: 50)
+- `GET /api/app/users`
+- `POST /api/app/users`
+- `PATCH /api/app/users/:id/role`
+- `PATCH /api/app/users/:id/status`
 
-Response:
-```json
-{
-  "data": [...],
-  "pagination": {
-    "page": 1,
-    "limit": 50,
-    "total": 100
-  }
-}
-```
+Shopify in settings:
 
-#### Get Variant Details
+- `GET /api/app/shopify/status`
+- `POST /api/app/shopify/connect`
+- `POST /api/app/shopify/disconnect`
+- `POST /api/app/shopify/sync/full`
 
-```
-GET /api/inventory/:variantId
-```
+Notifications:
 
-Returns variant with inventory level and stock movements.
+- `GET /api/app/notifications`
+- `GET /api/app/notifications/unread-count`
+- `PATCH /api/app/notifications/:id/read`
 
-#### Adjust Stock
+## Shopify OAuth / Compatibility API (`/api/shopify/*`)
 
-```
-POST /api/inventory/:variantId/adjust
-```
+- `GET /api/shopify/auth`
+- `POST /api/shopify/get-install-url`
+- `POST /api/shopify/callback`
+- `GET /api/shopify/callback`
+- `GET /api/shopify/brands`
+- `POST /api/shopify/setup-webhooks/:brandId`
+- `POST /api/shopify/disconnect/:brandId`
+- `GET /api/shopify/status/:brandId`
 
-Requires: `operator` role or higher
+## Webhooks (`/api/webhooks/*`)
 
-Body:
-```json
-{
-  "delta": -5,
-  "reason": "Damaged items removed"
-}
-```
+- `POST /api/webhooks/shopify`
 
-#### Get Stock Movements
+Required Shopify headers:
 
-```
-GET /api/inventory/:variantId/movements
-```
+- `X-Shopify-Hmac-Sha256`
+- `X-Shopify-Topic`
+- `X-Shopify-Shop-Domain`
 
-Query parameters:
-- `limit` (optional): Number of movements (default: 50)
+## Onboarding (`/api/onboarding/*`)
 
-#### Sync Product
+- `POST /api/onboarding/bootstrap-store`
 
-```
-POST /api/inventory/sync/:brandId/:productId
-```
+## Notes
 
-Requires: `manager` role or higher
-
-Syncs product from Shopify.
-
-### Daily Reports
-
-#### Get Reports
-
-```
-GET /api/reports
-```
-
-Query parameters:
-- `start_date` (optional): Filter from date
-- `end_date` (optional): Filter to date
-- `team_id` (optional): Filter by team
-
-#### Submit Report
-
-```
-POST /api/reports
-```
-
-Body:
-```json
-{
-  "done_today": "Completed inventory sync",
-  "blockers": "API rate limit issues",
-  "plan_tomorrow": "Optimize sync process",
-  "report_date": "2024-01-15"
-}
-```
-
-#### Check Today's Status
-
-```
-GET /api/reports/status/today
-```
-
-Returns whether user submitted today's report.
-
-#### Get Team Summary
-
-```
-GET /api/reports/team/:teamId/summary
-```
-
-Query parameters:
-- `date` (optional): Report date (default: today)
-
-### Notifications
-
-#### Get Notifications
-
-```
-GET /api/notifications
-```
-
-Query parameters:
-- `unread_only` (optional): Filter unread only
-
-#### Mark as Read
-
-```
-PATCH /api/notifications/:notificationId/read
-```
-
-#### Mark All as Read
-
-```
-POST /api/notifications/read-all
-```
-
-#### Get Unread Count
-
-```
-GET /api/notifications/unread-count
-```
-
-### Teams
-
-#### Get My Teams
-
-```
-GET /api/teams/my-teams
-```
-
-Returns teams user belongs to.
-
-#### Get Team Members
-
-```
-GET /api/teams/:teamId/members
-```
-
-#### Get Team Brands
-
-```
-GET /api/teams/:teamId/brands
-```
-
-## Error Responses
-
-All endpoints return errors in this format:
-
-```json
-{
-  "error": "Error message",
-  "status": 400
-}
-```
-
-Common status codes:
-- `400`: Bad request
-- `401`: Unauthorized
-- `403`: Forbidden (insufficient permissions)
-- `404`: Not found
-- `500`: Internal server error
-
-## Rate Limiting
-
-Currently no rate limiting implemented. Consider adding in production.
-
-## Webhooks
-
-### Shopify Webhook Topics
-
-The system listens to these topics:
-
-- `inventory_levels/update`: Inventory level changed
-- `orders/create`: New order created
-- `orders/paid`: Order paid
-- `orders/cancelled`: Order cancelled
-- `refunds/create`: Refund created
-- `products/update`: Product updated
-
-### Webhook Security
-
-- HMAC signature verification
-- Idempotency using event hashes
-- Async processing
+- Canonical tenant scope is `store_id`.
+- Legacy `brand_id` is still accepted internally for transition compatibility.
+- Legacy `/api/inventory` style endpoints are not canonical in current backend.

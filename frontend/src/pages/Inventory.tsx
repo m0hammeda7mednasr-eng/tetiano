@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import api from '../lib/api';
 import {
   Search, Plus, History, Package, Tag,
@@ -38,18 +38,18 @@ export default function Inventory() {
   const [showAdjust, setAdjust] = useState(false);
   const [showLedger, setLedger] = useState(false);
 
-  useEffect(() => {
-    const t = setTimeout(fetchInventory, 400);
-    return () => clearTimeout(t);
-  }, [search]);
-
-  const fetchInventory = async () => {
+  const fetchInventory = useCallback(async () => {
     setLoading(true);
     try {
       const { data } = await api.get('/api/app/products', { params: { search, limit: 150 } });
       setVariants(data.products || data.data || []);
     } finally { setLoading(false); }
-  };
+  }, [search]);
+
+  useEffect(() => {
+    const t = setTimeout(fetchInventory, 400);
+    return () => clearTimeout(t);
+  }, [fetchInventory]);
 
   const openAdjust = (v: Variant) => { setSelected(v); setAdjust(true); };
   const openLedger = (v: Variant) => { setSelected(v); setLedger(true); };

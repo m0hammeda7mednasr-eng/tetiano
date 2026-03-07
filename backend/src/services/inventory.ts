@@ -5,7 +5,8 @@ import { logger } from '../utils/logger';
 
 export interface StockMovement {
   variantId: string;
-  brandId: string;
+  brandId?: string;
+  storeId?: string;
   delta: number;
   previousQuantity: number;
   newQuantity: number;
@@ -16,43 +17,172 @@ export interface StockMovement {
 }
 
 function extractShopifyId(value: unknown): string {
-  if (!value) return "";
-  const parts = String(value).split("/");
-  return parts[parts.length - 1] || "";
+  if (!value) return '';
+  const parts = String(value).split('/');
+  return parts[parts.length - 1] || '';
+}
+
+function resolveTenantId(input: { brandId?: string | null; storeId?: string | null }): string {
+  return String(input.storeId || input.brandId || '').trim();
 }
 
 function isSchemaCompatibilityError(error: any): boolean {
-  const text = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  const text = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase();
   return (
-    text.includes("column") ||
-    text.includes("relation") ||
-    text.includes("does not exist") ||
-    text.includes("schema cache") ||
-    text.includes("unknown relationship")
+    text.includes('column') ||
+    text.includes('relation') ||
+    text.includes('does not exist') ||
+    text.includes('schema cache') ||
+    text.includes('unknown relationship') ||
+    text.includes('on conflict')
   );
+}
+
+async function upsertInventoryLevelScoped(
+  variantId: string,
+  tenantId: string,
+  available: number,
+): Promise<void> {
+  const modern = await supabase.from('inventory_levels').upsert(
+    {
+      variant_id: variantId,
+      store_id: tenantId,
+      available,
+    },
+    { onConflict: 'variant_id' },
+  );
+
+  if (!modern.error) {
+    return;
+  }
+
+  if (!isSchemaCompatibilityError(modern.error)) {
+    throw modern.error;
+  }
+
+  const legacy = await supabase.from('inventory_levels').upsert(
+    {
+      variant_id: variantId,
+      brand_id: tenantId,
+      available,
+    },
+    { onConflict: 'variant_id' },
+  );
+
+  if (legacy.error) {
+    throw legacy.error;
+  }
+}
+
+async function insertStockMovementScoped(
+  movement: StockMovement,
+  tenantId: string,
+): Promise<void> {
+  const modern = await supabase.from('stock_movements').insert({
+    variant_id: movement.variantId,
+    store_id: tenantId,
+    delta: movement.delta,
+    previous_quantity: movement.previousQuantity,
+    new_quantity: movement.newQuantity,
+    source: movement.source,
+    reason: movement.reason,
+    reference_id: movement.referenceId,
+    user_id: movement.userId,
+  });
+
+  if (!modern.error) {
+    return;
+  }
+
+  if (!isSchemaCompatibilityError(modern.error)) {
+    throw modern.error;
+  }
+
+  const legacy = await supabase.from('stock_movements').insert({
+    variant_id: movement.variantId,
+    brand_id: tenantId,
+    delta: movement.delta,
+    previous_quantity: movement.previousQuantity,
+    new_quantity: movement.newQuantity,
+    source: movement.source,
+    reason: movement.reason,
+    reference_id: movement.referenceId,
+    user_id: movement.userId,
+  });
+
+  if (legacy.error) {
+    throw legacy.error;
+  }
+}
+
+async function upsertEntityIdWithTenantFallback(params: {
+  table: string;
+  tenantId: string;
+  fullPayload: Record<string, unknown>;
+  minimalPayload: Record<string, unknown>;
+  modernConflict: string;
+  legacyConflict: string;
+}): Promise<string> {
+  const attempts = [
+    () =>
+      supabase
+        .from(params.table)
+        .upsert({ ...params.fullPayload, store_id: params.tenantId }, { onConflict: params.modernConflict })
+        .select('id')
+        .single(),
+    () =>
+      supabase
+        .from(params.table)
+        .upsert({ ...params.minimalPayload, store_id: params.tenantId }, { onConflict: params.modernConflict })
+        .select('id')
+        .single(),
+    () =>
+      supabase
+        .from(params.table)
+        .upsert({ ...params.fullPayload, brand_id: params.tenantId }, { onConflict: params.legacyConflict })
+        .select('id')
+        .single(),
+    () =>
+      supabase
+        .from(params.table)
+        .upsert({ ...params.minimalPayload, brand_id: params.tenantId }, { onConflict: params.legacyConflict })
+        .select('id')
+        .single(),
+  ];
+
+  let lastSchemaError: any = null;
+  for (const attempt of attempts) {
+    const result = await attempt();
+    if (!result.error) {
+      return String(result.data.id);
+    }
+    if (!isSchemaCompatibilityError(result.error)) {
+      throw result.error;
+    }
+    lastSchemaError = result.error;
+  }
+
+  throw lastSchemaError || new Error(`Failed to upsert ${params.table}`);
 }
 
 export class InventoryService {
   // Record stock movement in ledger
   async recordStockMovement(movement: StockMovement): Promise<void> {
-    const { error } = await supabase.from('stock_movements').insert({
-      variant_id: movement.variantId,
-      brand_id: movement.brandId,
-      delta: movement.delta,
-      previous_quantity: movement.previousQuantity,
-      new_quantity: movement.newQuantity,
-      source: movement.source,
-      reason: movement.reason,
-      reference_id: movement.referenceId,
-      user_id: movement.userId,
-    });
-
-    if (error) {
-      logger.error('Failed to record stock movement', { error, movement });
-      throw error;
+    const tenantId = resolveTenantId(movement);
+    if (!tenantId) {
+      throw new Error('store_id context is required to record stock movement');
     }
 
-    logger.info('Stock movement recorded', movement);
+    try {
+      await insertStockMovementScoped(movement, tenantId);
+      logger.info('Stock movement recorded', { ...movement, storeId: tenantId });
+    } catch (error: any) {
+      logger.error('Failed to record stock movement', {
+        error: error?.message || error,
+        movement: { ...movement, storeId: tenantId },
+      });
+      throw error;
+    }
   }
 
   // Update inventory level
@@ -73,23 +203,12 @@ export class InventoryService {
     }
 
     const previousQuantity = current?.available || 0;
-
-    // Upsert new quantity
-    const { error: upsertError } = await supabase
-      .from('inventory_levels')
-      .upsert(
-        {
-          variant_id: variantId,
-          brand_id: brandId,
-          available: newQuantity,
-        },
-        { onConflict: 'variant_id' }
-      );
-
-    if (upsertError) {
-      logger.error('Failed to update inventory level', { error: upsertError });
-      throw upsertError;
+    const tenantId = resolveTenantId({ storeId: brandId });
+    if (!tenantId) {
+      throw new Error('store_id context is required to update inventory level');
     }
+
+    await upsertInventoryLevelScoped(variantId, tenantId, newQuantity);
 
     return previousQuantity;
   }
@@ -102,15 +221,26 @@ export class InventoryService {
     userId: string
   ): Promise<void> {
     // Get variant and brand info
-    const { data: variant, error: variantError } = await supabase
+    let variantResult = await supabase
       .from('variants')
       .select(
-        'id, brand_id, shopify_variant_id, inventory_item_id, brands(*)',
+        'id, store_id, brand_id, shopify_variant_id, inventory_item_id, brands(*)',
       )
       .eq('id', variantId)
       .single();
 
-    if (variantError || !variant) {
+    if (variantResult.error && isSchemaCompatibilityError(variantResult.error)) {
+      variantResult = await supabase
+        .from('variants')
+        .select(
+          'id, brand_id, shopify_variant_id, inventory_item_id, brands(*)',
+        )
+        .eq('id', variantId)
+        .single();
+    }
+
+    const variant = variantResult.data as Record<string, any> | null;
+    if (variantResult.error || !variant) {
       throw new Error('Variant not found');
     }
 
@@ -151,13 +281,21 @@ export class InventoryService {
     }
     await shopifyService.adjustInventory(inventoryItemId, delta, reason);
 
+    const tenantId = resolveTenantId({
+      storeId: variant.store_id as string | undefined,
+      brandId: variant.brand_id as string | undefined,
+    });
+    if (!tenantId) {
+      throw new Error('Variant is missing tenant scope');
+    }
+
     // Update local inventory
-    await this.updateInventoryLevel(variantId, variant.brand_id, newQuantity);
+    await this.updateInventoryLevel(variantId, tenantId, newQuantity);
 
     // Record movement
     await this.recordStockMovement({
       variantId,
-      brandId: variant.brand_id,
+      storeId: tenantId,
       delta,
       previousQuantity,
       newQuantity,
@@ -171,15 +309,21 @@ export class InventoryService {
       delta,
       reason,
       userId,
+      storeId: tenantId,
     });
   }
 
   // Sync product from Shopify
-  async syncProduct(brandId: string, shopifyProductId: string): Promise<void> {
+  async syncProduct(storeId: string, shopifyProductId: string): Promise<void> {
+    const tenantId = resolveTenantId({ storeId });
+    if (!tenantId) {
+      throw new Error('store_id context is required');
+    }
+
     const { data: brand, error: brandError } = await supabase
       .from('brands')
       .select('*')
-      .eq('id', brandId)
+      .eq('id', tenantId)
       .maybeSingle();
 
     if (brandError) {
@@ -205,7 +349,6 @@ export class InventoryService {
     }
 
     const fullProductPayload = {
-      brand_id: brandId,
       shopify_product_id: shopifyProductId,
       title: product.title,
       handle: product.handle,
@@ -215,7 +358,6 @@ export class InventoryService {
       shopify_payload: product,
     };
     const minimalProductPayload = {
-      brand_id: brandId,
       shopify_product_id: shopifyProductId,
       title: product.title,
       handle: product.handle,
@@ -224,31 +366,14 @@ export class InventoryService {
       status: product.status,
     };
 
-    let dbProduct: any = null;
-    const fullProductResult = await supabase
-      .from('products')
-      .upsert(fullProductPayload, { onConflict: 'brand_id,shopify_product_id' })
-      .select('id')
-      .single();
-
-    if (fullProductResult.error) {
-      if (!isSchemaCompatibilityError(fullProductResult.error)) {
-        throw fullProductResult.error;
-      }
-
-      const fallbackProductResult = await supabase
-        .from('products')
-        .upsert(minimalProductPayload, { onConflict: 'brand_id,shopify_product_id' })
-        .select('id')
-        .single();
-
-      if (fallbackProductResult.error) {
-        throw fallbackProductResult.error;
-      }
-      dbProduct = fallbackProductResult.data;
-    } else {
-      dbProduct = fullProductResult.data;
-    }
+    const dbProductId = await upsertEntityIdWithTenantFallback({
+      table: 'products',
+      tenantId,
+      fullPayload: fullProductPayload,
+      minimalPayload: minimalProductPayload,
+      modernConflict: 'store_id,shopify_product_id',
+      legacyConflict: 'brand_id,shopify_product_id',
+    });
 
     // Sync variants
     for (const variantEdge of product.variants.edges) {
@@ -264,8 +389,7 @@ export class InventoryService {
       const option3 = selectedOptions[2]?.value || null;
 
       const fullVariantPayload = {
-        product_id: dbProduct.id,
-        brand_id: brandId,
+        product_id: dbProductId,
         shopify_variant_id: shopifyVariantId,
         title: variant.title,
         sku: variant.sku,
@@ -284,8 +408,7 @@ export class InventoryService {
       };
 
       const minimalVariantPayload = {
-        product_id: dbProduct.id,
-        brand_id: brandId,
+        product_id: dbProductId,
         shopify_variant_id: shopifyVariantId,
         title: variant.title,
         sku: variant.sku,
@@ -298,49 +421,23 @@ export class InventoryService {
         option3,
       };
 
-      let dbVariant: any = null;
-      const fullVariantResult = await supabase
-        .from('variants')
-        .upsert(fullVariantPayload, { onConflict: 'brand_id,shopify_variant_id' })
-        .select('id')
-        .single();
-
-      if (fullVariantResult.error) {
-        if (!isSchemaCompatibilityError(fullVariantResult.error)) {
-          throw fullVariantResult.error;
-        }
-
-        const fallbackVariantResult = await supabase
-          .from('variants')
-          .upsert(minimalVariantPayload, { onConflict: 'brand_id,shopify_variant_id' })
-          .select('id')
-          .single();
-
-        if (fallbackVariantResult.error) {
-          throw fallbackVariantResult.error;
-        }
-        dbVariant = fallbackVariantResult.data;
-      } else {
-        dbVariant = fullVariantResult.data;
-      }
+      const dbVariantId = await upsertEntityIdWithTenantFallback({
+        table: 'variants',
+        tenantId,
+        fullPayload: fullVariantPayload,
+        minimalPayload: minimalVariantPayload,
+        modernConflict: 'store_id,shopify_variant_id',
+        legacyConflict: 'brand_id,shopify_variant_id',
+      });
 
       const inventoryQuantity = Number.isFinite(Number(variant.inventoryQuantity))
         ? Number(variant.inventoryQuantity)
         : 0;
-      const { error: inventoryError } = await supabase.from('inventory_levels').upsert(
-        {
-          variant_id: dbVariant.id,
-          brand_id: brandId,
-          available: inventoryQuantity,
-        },
-        { onConflict: 'variant_id' },
-      );
-      if (inventoryError) {
-        throw inventoryError;
-      }
+
+      await upsertInventoryLevelScoped(dbVariantId, tenantId, inventoryQuantity);
     }
 
-    logger.info('Product synced', { brandId, shopifyProductId });
+    logger.info('Product synced', { storeId: tenantId, shopifyProductId });
   }
 
   // Get stock movements for variant

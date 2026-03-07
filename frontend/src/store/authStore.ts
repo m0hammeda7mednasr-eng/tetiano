@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { User } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
-import api from "../lib/api";
+import api, { setApiAccessToken } from "../lib/api";
 
 export interface UserProfile {
   id: string;
@@ -31,6 +31,7 @@ interface AuthState {
 }
 
 let authListenerRegistered = false;
+let initializePromise: Promise<void> | null = null;
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
@@ -46,27 +47,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return;
     }
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    if (!initializePromise) {
+      initializePromise = (async () => {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
 
-    if (session?.user) {
-      await fetchAndSetProfile(session.user, set);
-    } else {
-      set({
-        user: null,
-        profile: null,
-        isAdmin: false,
-        isManager: false,
-        permissions: null,
-        loading: false,
-      });
-    }
+        setApiAccessToken(session?.access_token || null);
 
-    if (!authListenerRegistered) {
-      supabase.auth.onAuthStateChange(async (_event, authSession) => {
-        if (authSession?.user) {
-          await fetchAndSetProfile(authSession.user, set);
+        if (session?.user) {
+          await fetchAndSetProfile(session.user, set);
         } else {
           set({
             user: null,
@@ -77,11 +67,33 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             loading: false,
           });
         }
+
+        if (!authListenerRegistered) {
+          supabase.auth.onAuthStateChange(async (_event, authSession) => {
+            setApiAccessToken(authSession?.access_token || null);
+            if (authSession?.user) {
+              await fetchAndSetProfile(authSession.user, set);
+            } else {
+              set({
+                user: null,
+                profile: null,
+                isAdmin: false,
+                isManager: false,
+                permissions: null,
+                loading: false,
+              });
+            }
+          });
+          authListenerRegistered = true;
+        }
+
+        set({ initialized: true });
+      })().finally(() => {
+        initializePromise = null;
       });
-      authListenerRegistered = true;
     }
 
-    set({ initialized: true });
+    await initializePromise;
   },
 
   signIn: async (email: string, password: string) => {
@@ -137,6 +149,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   signOut: async () => {
     await supabase.auth.signOut();
+    setApiAccessToken(null);
     set({
       user: null,
       profile: null,

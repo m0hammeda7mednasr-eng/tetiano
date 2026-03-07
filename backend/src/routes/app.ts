@@ -266,8 +266,9 @@ async function fetchAllNetProfitRowsScoped(params: {
   const pageSize = 1000;
   const rows: Array<Record<string, unknown>> = [];
   let page = 0;
+  let hasMore = true;
 
-  while (true) {
+  while (hasMore) {
     const from = page * pageSize;
     const to = from + pageSize - 1;
     const result = await supabase
@@ -282,9 +283,7 @@ async function fetchAllNetProfitRowsScoped(params: {
 
     const pageRows = (result.data || []) as Array<Record<string, unknown>>;
     rows.push(...pageRows);
-    if (pageRows.length < pageSize) {
-      break;
-    }
+    hasMore = pageRows.length === pageSize;
     page += 1;
   }
 
@@ -499,97 +498,6 @@ async function syncVariantDetailsToShopify(params: {
     price: params.updates.price,
     compareAtPrice: params.updates.compare_at_price,
   });
-}
-
-function trimTrailingSlash(input: string): string {
-  return input.replace(/\/+$/, "");
-}
-
-async function postLegacyInstallUrl(baseUrl: string, authHeader: string, payload: Record<string, unknown>) {
-  try {
-    const response = await axios.post(`${trimTrailingSlash(baseUrl)}/api/shopify/get-install-url`, payload, {
-      headers: {
-        Authorization: authHeader,
-        "Content-Type": "application/json",
-      },
-      timeout: 15_000,
-      validateStatus: () => true,
-    });
-
-    const data = (response.data || {}) as Record<string, any>;
-    if (response.status >= 400) {
-      const err: any = new Error(String(data.error || "Failed to start Shopify OAuth flow"));
-      err.status = response.status;
-      err.code = data.code || null;
-      err.details = data;
-      throw err;
-    }
-
-    const installUrl = String(data.installUrl || data.install_url || "");
-    if (!installUrl) {
-      const err: any = new Error("Legacy Shopify OAuth route did not return install URL");
-      err.status = 502;
-      throw err;
-    }
-
-    return {
-      installUrl,
-      state: data.state ? String(data.state) : null,
-    };
-  } catch (requestError: any) {
-    if (requestError?.status) {
-      throw requestError;
-    }
-
-    const err: any = new Error(String(requestError?.message || "Failed to start Shopify OAuth flow"));
-    err.status = Number(requestError?.response?.status || 0);
-    err.code = requestError?.response?.data?.code || requestError?.code || null;
-    err.details = requestError?.response?.data || null;
-    throw err;
-  }
-}
-
-async function requestLegacyInstallUrl(req: AuthRequest, payload: Record<string, unknown>) {
-  const authHeader = String(req.headers.authorization || "");
-  const forwardedProto = String(req.headers["x-forwarded-proto"] || "")
-    .split(",")[0]
-    .trim();
-  const forwardedHost = String(req.headers["x-forwarded-host"] || "")
-    .split(",")[0]
-    .trim();
-  const host = forwardedHost || req.get("host") || "";
-  const protocol = forwardedProto || (host.includes("localhost") ? "http" : "https");
-  const requestBaseUrl = host ? `${protocol}://${host}` : resolveBackendUrl(req);
-  const fallbackBaseUrl = resolveBackendUrl(req);
-
-  const candidateBaseUrls = [requestBaseUrl, fallbackBaseUrl]
-    .map((value) => trimTrailingSlash(String(value || "").trim()))
-    .filter(Boolean)
-    .filter((value, index, list) => list.indexOf(value) === index);
-
-  let lastError: any = null;
-  for (let index = 0; index < candidateBaseUrls.length; index += 1) {
-    const baseUrl = candidateBaseUrls[index];
-    try {
-      return await postLegacyInstallUrl(baseUrl, authHeader, payload);
-    } catch (error: any) {
-      lastError = error;
-      const status = Number(error?.status || 0);
-      const isRetryable = status === 0 || status >= 500;
-      const hasNext = index < candidateBaseUrls.length - 1;
-      if (!isRetryable || !hasNext) {
-        throw error;
-      }
-      logger.warn("Legacy install-url bridge failed; retrying with fallback backend URL", {
-        baseUrl,
-        status,
-        code: error?.code,
-        error: error?.message,
-      });
-    }
-  }
-
-  throw lastError || new Error("Failed to start Shopify OAuth flow");
 }
 
 function ensureStoreId(req: AuthRequest, res: Response): string | null {
@@ -1676,6 +1584,7 @@ router.get("/shopify/status", async (req: AuthRequest, res: Response) => {
   if (!storeId) return;
 
   try {
+    logger.info("Shopify status requested", { route: "/api/app/shopify/status", store_id: storeId });
     const result = await supabase
       .from("shopify_connections")
       .select("store_id, shop_domain, scopes, status, connected_at, updated_at")
@@ -1742,6 +1651,14 @@ router.get("/shopify/status", async (req: AuthRequest, res: Response) => {
       }
     }
 
+    logger.info("Shopify status resolved", {
+      route: "/api/app/shopify/status",
+      store_id: storeId,
+      shop_domain: shopDomain,
+      connected,
+      status,
+    });
+
     return res.json({
       connected,
       status,
@@ -1751,7 +1668,12 @@ router.get("/shopify/status", async (req: AuthRequest, res: Response) => {
       updated_at: result.data?.updated_at || null,
     });
   } catch (error: any) {
-    logger.error("App shopify status failed", { error: error?.message });
+    logger.error("App shopify status failed", {
+      route: "/api/app/shopify/status",
+      store_id: storeId,
+      failure_code: error?.code || null,
+      error: error?.message,
+    });
     return res.status(500).json({ error: "Failed to load Shopify status" });
   }
 });
@@ -1810,6 +1732,12 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
   }
 
   try {
+    logger.info("Shopify connect requested", {
+      route: "/api/app/shopify/connect",
+      store_id: storeId,
+      shop_domain: shopDomain,
+    });
+
     // Save credentials to brands table
     await upsertLegacyBrandForStore({
       storeId,
@@ -1834,7 +1762,51 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
     });
     
     if (stateInsert.error) {
-      logger.error("Failed to create OAuth state", { error: stateInsert.error, storeId, shopDomain });
+      logger.warn("Failed to create OAuth state in app route, trying compatibility install-url route", {
+        route: "/api/app/shopify/connect",
+        store_id: storeId,
+        shop_domain: shopDomain,
+        error: stateInsert.error.message,
+      });
+
+      try {
+        const baseUrl = resolveBackendUrl(req);
+        const legacyResponse = await axios.post(
+          `${baseUrl}/api/shopify/get-install-url`,
+          {
+            shop: shopDomain,
+            api_key: apiKey,
+            api_secret: apiSecret,
+            brand_id: storeId,
+          },
+          {
+            headers: {
+              Authorization: String(req.headers.authorization || ""),
+              "Content-Type": "application/json",
+            },
+            timeout: 15000,
+          },
+        );
+
+        const installUrl = String(legacyResponse.data?.installUrl || "");
+        if (installUrl) {
+          return res.status(201).json({
+            install_url: installUrl,
+            state: legacyResponse.data?.state || state,
+            shop: shopDomain,
+            fallback: "legacy_get_install_url",
+          });
+        }
+      } catch (legacyError: any) {
+        logger.error("Compatibility install-url fallback failed", {
+          route: "/api/app/shopify/connect",
+          store_id: storeId,
+          shop_domain: shopDomain,
+          failure_code: legacyError?.code || null,
+          error: legacyError?.message,
+        });
+      }
+
       throw new Error(`Failed to create OAuth state: ${stateInsert.error.message}`);
     }
 
@@ -1861,7 +1833,12 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
       `redirect_uri=${encodeURIComponent(redirectUri)}&` +
       `state=${encodeURIComponent(state)}`;
 
-    logger.info("Shopify OAuth flow started", { storeId, shopDomain, state });
+    logger.info("Shopify OAuth flow started", {
+      route: "/api/app/shopify/connect",
+      store_id: storeId,
+      shop_domain: shopDomain,
+      state,
+    });
 
     return res.status(201).json({
       install_url: installUrl,
@@ -1869,13 +1846,14 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
       shop: shopDomain,
     });
   } catch (error: any) {
+    const failureCode = String(error?.code || "shopify_connect_failed");
     logger.error("App shopify connect failed", {
       error: error?.message,
-      code: error?.code,
+      failure_code: failureCode,
       details: error?.details,
       hint: error?.hint,
-      storeId,
-      shopDomain,
+      store_id: storeId,
+      shop_domain: shopDomain,
     });
 
     // Handle duplicate key error (brand already exists)

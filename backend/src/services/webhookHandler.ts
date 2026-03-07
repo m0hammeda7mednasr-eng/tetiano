@@ -22,13 +22,71 @@ function isSchemaCompatibilityError(error: any): boolean {
     text.includes('relation') ||
     text.includes('does not exist') ||
     text.includes('schema cache') ||
-    text.includes('unknown relationship')
+    text.includes('unknown relationship') ||
+    text.includes('on conflict')
   );
 }
 
 function isMultipleRowsError(error: any): boolean {
   const text = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase();
   return text.includes('multiple') && text.includes('rows');
+}
+
+function resolveTenantId(value: unknown): string {
+  return String(value || '').trim();
+}
+
+async function upsertTenantScoped(params: {
+  table: string;
+  tenantId: string;
+  payload: Record<string, unknown>;
+  modernConflict: string;
+  legacyConflict: string;
+}): Promise<void> {
+  const modern = await supabase
+    .from(params.table)
+    .upsert({ ...params.payload, store_id: params.tenantId }, { onConflict: params.modernConflict });
+  if (!modern.error) {
+    return;
+  }
+
+  if (!isSchemaCompatibilityError(modern.error)) {
+    throw modern.error;
+  }
+
+  const legacy = await supabase
+    .from(params.table)
+    .upsert({ ...params.payload, brand_id: params.tenantId }, { onConflict: params.legacyConflict });
+  if (legacy.error && !isSchemaCompatibilityError(legacy.error)) {
+    throw legacy.error;
+  }
+}
+
+async function deleteByTenantScoped(params: {
+  table: string;
+  tenantId: string;
+  filters?: Record<string, string>;
+}): Promise<void> {
+  let modernQuery: any = supabase.from(params.table).delete().eq('store_id', params.tenantId);
+  for (const [key, value] of Object.entries(params.filters || {})) {
+    modernQuery = modernQuery.eq(key, value);
+  }
+  const modern = await modernQuery;
+  if (!modern.error) {
+    return;
+  }
+  if (!isSchemaCompatibilityError(modern.error)) {
+    throw modern.error;
+  }
+
+  let legacyQuery: any = supabase.from(params.table).delete().eq('brand_id', params.tenantId);
+  for (const [key, value] of Object.entries(params.filters || {})) {
+    legacyQuery = legacyQuery.eq(key, value);
+  }
+  const legacy = await legacyQuery;
+  if (legacy.error && !isSchemaCompatibilityError(legacy.error)) {
+    throw legacy.error;
+  }
 }
 
 export class WebhookHandler {
@@ -66,35 +124,67 @@ export class WebhookHandler {
     payload: any,
     shopDomain: string,
   ): Promise<void> {
-    const legacyInsert = await supabase.from('shopify_webhook_events').insert({
-      event_hash: eventHash,
-      topic,
-      shopify_id: shopifyId,
-      brand_id: brandId,
-      payload,
-      processed: true,
-    });
+    const tenantId = resolveTenantId(brandId);
+    const attempts = [
+      () =>
+        supabase.from('shopify_webhook_events').insert({
+          event_hash: eventHash,
+          topic,
+          shopify_id: shopifyId,
+          store_id: tenantId,
+          payload,
+          processed: true,
+        }),
+      () =>
+        supabase.from('shopify_webhook_events').insert({
+          event_hash: eventHash,
+          topic,
+          shopify_id: shopifyId,
+          brand_id: tenantId,
+          payload,
+          processed: true,
+        }),
+      () =>
+        supabase.from('shopify_webhook_events').insert({
+          store_id: tenantId,
+          shop: shopDomain,
+          topic,
+          event_id: shopifyId,
+          data: payload,
+          processed: true,
+          processed_at: new Date().toISOString(),
+        }),
+      () =>
+        supabase.from('shopify_webhook_events').insert({
+          brand_id: tenantId,
+          shop: shopDomain,
+          topic,
+          event_id: shopifyId,
+          data: payload,
+          processed: true,
+          processed_at: new Date().toISOString(),
+        }),
+    ];
 
-    if (!legacyInsert.error) {
-      return;
+    let lastSchemaError: any = null;
+    for (const attempt of attempts) {
+      const result = await attempt();
+      if (!result.error) {
+        return;
+      }
+      if (!isSchemaCompatibilityError(result.error)) {
+        throw result.error;
+      }
+      lastSchemaError = result.error;
     }
 
-    if (!isSchemaCompatibilityError(legacyInsert.error)) {
-      throw legacyInsert.error;
-    }
-
-    const modernInsert = await supabase.from('shopify_webhook_events').insert({
-      brand_id: brandId,
-      shop: shopDomain,
-      topic,
-      event_id: shopifyId,
-      data: payload,
-      processed: true,
-      processed_at: new Date().toISOString(),
-    });
-
-    if (modernInsert.error && !isSchemaCompatibilityError(modernInsert.error)) {
-      throw modernInsert.error;
+    if (lastSchemaError) {
+      logger.warn('Unable to persist webhook event due to schema mismatch', {
+        topic,
+        shopDomain,
+        tenantId,
+        error: lastSchemaError.message,
+      });
     }
   }
 
@@ -211,13 +301,24 @@ export class WebhookHandler {
     variantId?: string | null,
     inventoryItemId?: string | null,
   ): Promise<{ id: string } | null> {
+    const tenantId = resolveTenantId(brandId);
+
     if (inventoryItemId) {
-      const byInventoryItem = await supabase
+      let byInventoryItem = await supabase
         .from('variants')
         .select('id')
-        .eq('brand_id', brandId)
+        .eq('store_id', tenantId)
         .eq('inventory_item_id', inventoryItemId)
         .maybeSingle();
+
+      if (byInventoryItem.error && isSchemaCompatibilityError(byInventoryItem.error)) {
+        byInventoryItem = await supabase
+          .from('variants')
+          .select('id')
+          .eq('brand_id', tenantId)
+          .eq('inventory_item_id', inventoryItemId)
+          .maybeSingle();
+      }
 
       if (!byInventoryItem.error && byInventoryItem.data) {
         return byInventoryItem.data as { id: string };
@@ -230,12 +331,21 @@ export class WebhookHandler {
 
     if (!variantId) return null;
 
-    const byVariantId = await supabase
+    let byVariantId = await supabase
       .from('variants')
       .select('id')
-      .eq('brand_id', brandId)
+      .eq('store_id', tenantId)
       .eq('shopify_variant_id', variantId)
       .maybeSingle();
+
+    if (byVariantId.error && isSchemaCompatibilityError(byVariantId.error)) {
+      byVariantId = await supabase
+        .from('variants')
+        .select('id')
+        .eq('brand_id', tenantId)
+        .eq('shopify_variant_id', variantId)
+        .maybeSingle();
+    }
 
     if (byVariantId.error) {
       throw byVariantId.error;
@@ -262,7 +372,7 @@ export class WebhookHandler {
 
     if (!variant) {
       logger.warn('Variant not found for inventory update', {
-        brandId: brand.id,
+        storeId: resolveTenantId(brand.id),
         inventoryItemId,
         variantId: payload.variant_id,
       });
@@ -280,7 +390,7 @@ export class WebhookHandler {
     if (delta !== 0) {
       await this.inventoryService.recordStockMovement({
         variantId: variant.id,
-        brandId: brand.id,
+        storeId: resolveTenantId(brand.id),
         delta,
         previousQuantity,
         newQuantity: available,
@@ -295,11 +405,11 @@ export class WebhookHandler {
   private async upsertShopifyOrder(brandId: string, payload: any): Promise<void> {
     const orderId = payload.id?.toString();
     if (!orderId) return;
+    const tenantId = resolveTenantId(brandId);
 
     const customerId = payload.customer?.id?.toString() || null;
     const lineItems = Array.isArray(payload.line_items) ? payload.line_items : [];
     const orderPayload = {
-      brand_id: brandId,
       shopify_order_id: orderId,
       customer_shopify_id: customerId,
       order_name: payload.name || null,
@@ -325,21 +435,21 @@ export class WebhookHandler {
       synced_at: new Date().toISOString(),
     };
 
-    const { error } = await supabase
-      .from('shopify_orders')
-      .upsert(orderPayload, { onConflict: 'brand_id,shopify_order_id' });
-
-    if (error && !isSchemaCompatibilityError(error)) {
-      throw error;
-    }
+    await upsertTenantScoped({
+      table: 'shopify_orders',
+      tenantId,
+      payload: orderPayload,
+      modernConflict: 'store_id,shopify_order_id',
+      legacyConflict: 'brand_id,shopify_order_id',
+    });
   }
 
   private async upsertShopifyCustomer(brandId: string, payload: any): Promise<void> {
     const customerId = payload.id?.toString();
     if (!customerId) return;
+    const tenantId = resolveTenantId(brandId);
 
     const customerPayload = {
-      brand_id: brandId,
       shopify_customer_id: customerId,
       email: payload.email || null,
       phone: payload.phone || null,
@@ -360,13 +470,13 @@ export class WebhookHandler {
       synced_at: new Date().toISOString(),
     };
 
-    const { error } = await supabase
-      .from('shopify_customers')
-      .upsert(customerPayload, { onConflict: 'brand_id,shopify_customer_id' });
-
-    if (error && !isSchemaCompatibilityError(error)) {
-      throw error;
-    }
+    await upsertTenantScoped({
+      table: 'shopify_customers',
+      tenantId,
+      payload: customerPayload,
+      modernConflict: 'store_id,shopify_customer_id',
+      legacyConflict: 'brand_id,shopify_customer_id',
+    });
   }
 
   // Handle order create/update
@@ -403,7 +513,7 @@ export class WebhookHandler {
 
         await this.inventoryService.recordStockMovement({
           variantId: variant.id,
-          brandId: brand.id,
+          storeId: resolveTenantId(brand.id),
           delta: -quantity,
           previousQuantity,
           newQuantity,
@@ -452,7 +562,7 @@ export class WebhookHandler {
 
       await this.inventoryService.recordStockMovement({
         variantId: variant.id,
-        brandId: brand.id,
+        storeId: resolveTenantId(brand.id),
         delta: quantity,
         previousQuantity,
         newQuantity,
@@ -500,7 +610,7 @@ export class WebhookHandler {
 
       await this.inventoryService.recordStockMovement({
         variantId: variant.id,
-        brandId: brand.id,
+        storeId: resolveTenantId(brand.id),
         delta: quantity,
         previousQuantity,
         newQuantity,
@@ -538,21 +648,18 @@ export class WebhookHandler {
     eventHash: string,
     shopDomain: string,
   ): Promise<void> {
+    const tenantId = resolveTenantId(brand.id);
     const productId = payload.id?.toString() || extractShopifyId(payload.admin_graphql_api_id);
     if (!productId) {
       await this.storeEvent(eventHash, 'products/delete', '', brand.id, payload, shopDomain);
       return;
     }
 
-    const { error } = await supabase
-      .from('products')
-      .delete()
-      .eq('brand_id', brand.id)
-      .eq('shopify_product_id', productId);
-
-    if (error) {
-      throw error;
-    }
+    await deleteByTenantScoped({
+      table: 'products',
+      tenantId,
+      filters: { shopify_product_id: productId },
+    });
 
     await this.storeEvent(eventHash, 'products/delete', productId, brand.id, payload, shopDomain);
   }
@@ -577,17 +684,14 @@ export class WebhookHandler {
     eventHash: string,
     shopDomain: string,
   ): Promise<void> {
+    const tenantId = resolveTenantId(brand.id);
     const customerId = payload.id?.toString() || '';
     if (customerId) {
-      const { error } = await supabase
-        .from('shopify_customers')
-        .delete()
-        .eq('brand_id', brand.id)
-        .eq('shopify_customer_id', customerId);
-
-      if (error && !isSchemaCompatibilityError(error)) {
-        throw error;
-      }
+      await deleteByTenantScoped({
+        table: 'shopify_customers',
+        tenantId,
+        filters: { shopify_customer_id: customerId },
+      });
     }
 
     await this.storeEvent(eventHash, 'customers/delete', customerId, brand.id, payload, shopDomain);

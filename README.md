@@ -1,129 +1,82 @@
-# Tetiano - نظام إدارة المخزون المتكامل
+# Tetiano
 
-نظام شامل لإدارة المخزون مع تكامل Shopify، مصمم للشركات التي تدير عدة علامات تجارية.
+Store-scoped inventory + Shopify integration platform.
 
-## المميزات الرئيسية
+## Stack
 
-- 🏪 **تكامل Shopify**: مزامنة تلقائية للمنتجات والطلبات والمخزون
-- 📊 **إدارة متعددة المتاجر**: دعم عدة متاجر وعلامات تجارية
-- 👥 **نظام صلاحيات متقدم**: أدوار ومستويات وصول مخصصة
-- 📦 **تتبع المخزون**: متابعة حركة المخزون في الوقت الفعلي
-- 📈 **تقارير وتحليلات**: تقارير يومية وإحصائيات مفصلة
-- 🔔 **إشعارات تلقائية**: تنبيهات عند نفاد المخزون
+- Frontend: React + TypeScript + Vite + Zustand + Supabase JS
+- Backend: Node.js + Express + TypeScript + Supabase JS
+- Database/Auth: Supabase Postgres + Supabase Auth
+- Deployment: Vercel (frontend) + Railway (backend)
 
-## التقنيات المستخدمة
+## Monorepo Layout
 
-### Backend
-- Node.js + Express + TypeScript
-- Supabase (PostgreSQL + Auth)
-- Shopify Admin API
-- Bull Queue للمهام المجدولة
+```
+backend/    Express API
+frontend/   React app
+supabase/   SQL migrations
+docs/       Canonical documentation
+```
 
-### Frontend
-- React + TypeScript
-- Vite
-- TailwindCSS
-- React Query
+## Getting Started
 
-## البدء السريع
-
-### 1. المتطلبات
-
-- Node.js 18+
-- حساب Supabase
-- حساب Shopify Partner (للتكامل)
-
-### 2. التثبيت
+### 1) Install
 
 ```bash
-# استنساخ المشروع
-git clone <repository-url>
-cd tetiano
-
-# تثبيت dependencies للـ backend
-cd backend
-npm install
-
-# تثبيت dependencies للـ frontend
-cd ../frontend
-npm install
+npm ci
 ```
 
-### 3. الإعداد
+### 2) Configure env
 
-1. انسخ `.env.example` إلى `.env` في مجلد backend
-2. املأ المتغيرات المطلوبة (Supabase, Shopify)
-3. شغل migrations في Supabase (ابدأ من `019_final_production_fix.sql`)
+- `backend/.env` from `backend/.env.example`
+- `frontend/.env` from `frontend/.env.example`
 
-### 4. التشغيل المحلي
+Required highlights:
+
+- Backend: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `FRONTEND_URL`, `BACKEND_URL`
+- Frontend: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`
+
+### 3) Run migrations
+
+Apply migrations in order, including hardening chain:
+
+- `016_single_store_and_shopify_data.sql`
+- `017_store_per_tenant_v2.sql`
+- `019_final_production_fix.sql`
+- `020_strict_store_rls.sql`
+- `021_store_id_backfill_hardening.sql`
+
+### 4) Run locally
 
 ```bash
-# Backend
-cd backend
-npm run dev
+# backend
+npm run dev:backend
 
-# Frontend (في terminal آخر)
-cd frontend
-npm run dev
+# frontend (another terminal)
+npm run dev:frontend
 ```
 
-## النشر على Production
+## Quality Gates
 
-### Backend (Railway)
-1. اربط المشروع بـ Railway
-2. اضبط Environment Variables
-3. Railway سيعمل deploy تلقائي
-
-### Frontend (Vercel)
-1. اربط المشروع بـ Vercel
-2. اضبط Environment Variables
-3. Vercel سيعمل deploy تلقائي
-
-### Database (Supabase)
-1. شغل migration 019 في SQL Editor
-2. تأكد من إنشاء stores للمستخدمين
-
-راجع `SETUP_GUIDE.md` للتفاصيل الكاملة.
-
-## الهيكل
-
-```
-tetiano/
-├── backend/           # Express API
-│   ├── src/
-│   │   ├── routes/    # API endpoints
-│   │   ├── services/  # Business logic
-│   │   ├── middleware/# Auth, validation
-│   │   └── utils/     # Helpers
-│   └── package.json
-├── frontend/          # React app
-│   ├── src/
-│   │   ├── components/
-│   │   ├── pages/
-│   │   ├── lib/
-│   │   └── hooks/
-│   └── package.json
-├── supabase/
-│   └── migrations/    # Database migrations
-└── docs/              # Documentation
+```bash
+npm run lint
+npm run typecheck
+npm run build
 ```
 
-## الوثائق
+## API Namespaces
 
-- [دليل الإعداد](SETUP_GUIDE.md)
-- [دليل الـ API](docs/api.md)
-- [البنية المعمارية](docs/architecture.md)
-- [دليل النشر](docs/deployment.md)
-- [إعداد Shopify OAuth](docs/shopify-oauth-setup.md)
+- `/health`
+- `/api/app/*` (primary app API)
+- `/api/shopify/*` (OAuth + Shopify compatibility routes)
+- `/api/webhooks/*` (Shopify webhooks)
+- `/api/onboarding/*`
 
-## المساهمة
+See full API docs in [`docs/api.md`](docs/api.md).
 
-راجع [CONTRIBUTING.md](CONTRIBUTING.md) لمعرفة كيفية المساهمة في المشروع.
+## Deployment
 
-## الترخيص
+- Frontend: deploy `frontend/` on Vercel
+- Backend: deploy `backend/` on Railway
 
-MIT License - راجع [LICENSE](LICENSE) للتفاصيل.
-
-## الدعم
-
-للمشاكل والأسئلة، افتح issue في GitHub أو راسلنا.
+Deployment details: [`docs/deployment.md`](docs/deployment.md) and [`docs/PRODUCTION_DEPLOYMENT.md`](docs/PRODUCTION_DEPLOYMENT.md).

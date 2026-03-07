@@ -8,40 +8,29 @@ const api = axios.create({
 });
 
 let cachedAccessToken: string | null = null;
-let pendingAccessTokenLookup: Promise<string | null> | null = null;
+let authListenerRegistered = false;
 
-async function loadAccessToken(): Promise<string | null> {
-  if (cachedAccessToken) {
-    return cachedAccessToken;
-  }
-
-  if (!pendingAccessTokenLookup) {
-    pendingAccessTokenLookup = supabase.auth
-      .getSession()
-      .then(({ data }) => {
-        const token = data.session?.access_token || null;
-        cachedAccessToken = token;
-        return token;
-      })
-      .catch(() => null)
-      .finally(() => {
-        pendingAccessTokenLookup = null;
-      });
-  }
-
-  return pendingAccessTokenLookup;
+export function setApiAccessToken(token: string | null): void {
+  cachedAccessToken = token || null;
 }
 
-supabase.auth.onAuthStateChange((_event, session) => {
-  cachedAccessToken = session?.access_token || null;
-});
+function ensureAuthListener(): void {
+  if (authListenerRegistered) return;
+
+  supabase.auth.onAuthStateChange((_event, session) => {
+    setApiAccessToken(session?.access_token || null);
+  });
+
+  authListenerRegistered = true;
+}
+
+ensureAuthListener();
 
 // Add auth token to requests
-api.interceptors.request.use(async (config) => {
-  const accessToken = await loadAccessToken();
-  if (accessToken) {
+api.interceptors.request.use((config) => {
+  if (cachedAccessToken) {
     config.headers = config.headers || {};
-    (config.headers as Record<string, string>).Authorization = `Bearer ${accessToken}`;
+    (config.headers as Record<string, string>).Authorization = `Bearer ${cachedAccessToken}`;
   }
 
   return config;

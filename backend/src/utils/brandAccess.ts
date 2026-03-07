@@ -147,10 +147,11 @@ export async function assertUserBrandAccess(userId: string | undefined, brandId:
 }
 
 export async function clearUserPrimaryBrandIfMatches(
-  _userId: string | undefined,
-  _brandId: string,
+  userId: string | undefined,
+  brandId: string,
 ): Promise<void> {
+  void userId;
+  void brandId;
   // Store link stays intact in store-per-tenant mode.
   return;
 }
-
