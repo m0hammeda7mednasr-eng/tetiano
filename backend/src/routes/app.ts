@@ -1277,6 +1277,7 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
   const rawShop = String(req.body?.shop || req.body?.shop_domain || "").trim();
   const apiKey = String(req.body?.api_key || "").trim();
   const apiSecret = String(req.body?.api_secret || "").trim();
+  
   if (!rawShop || !apiKey || !apiSecret) {
     return res.status(400).json({ error: "shop, api_key and api_secret are required" });
   }
@@ -1287,64 +1288,63 @@ router.post("/shopify/connect", requireStorePermission("shopify.manage"), async 
   }
 
   try {
-    // Keep brand row in sync for one-release compatibility window.
-    try {
-      await upsertLegacyBrandForStore({
-        storeId,
-        shopDomain,
-        apiKey,
-        apiSecret,
-      });
-    } catch (brandSyncError: any) {
-      logger.warn("Legacy brand sync failed before Shopify connect", {
-        error: brandSyncError?.message,
-        code: brandSyncError?.code,
-        details: brandSyncError?.details,
-        hint: brandSyncError?.hint,
-        storeId,
-      });
+    // Save credentials to brands table
+    await upsertLegacyBrandForStore({
+      storeId,
+      shopDomain,
+      apiKey,
+      apiSecret,
+    });
+
+    // Create OAuth state
+    const state = crypto.randomBytes(32).toString("hex");
+    const scopes = "read_products,write_products,read_inventory,write_inventory,read_orders,read_customers,read_locations";
+    
+    const stateInsert = await supabase.from("shopify_oauth_states").insert({
+      state,
+      shop: shopDomain,
+      brand_id: storeId,
+      user_id: req.user?.id || null,
+      api_key: apiKey,
+      api_secret: apiSecret,
+      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      created_at: nowIso(),
+    });
+    
+    if (stateInsert.error) {
+      logger.error("Failed to create OAuth state", { error: stateInsert.error, storeId, shopDomain });
+      throw new Error(`Failed to create OAuth state: ${stateInsert.error.message}`);
     }
 
-    // Canonical flow for this release: app endpoint proxies legacy OAuth installer.
-    let legacySource = "shopify_oauth_compat_bridge";
-    let legacy: { installUrl: string; state: string | null };
-    try {
-      legacy = await requestLegacyInstallUrl(req, {
-        shop: shopDomain,
-        api_key: apiKey,
-        api_secret: apiSecret,
-        brand_id: storeId,
-      });
-    } catch (bridgeError: any) {
-      const bridgeStatus = Number(bridgeError?.status || 0);
-      if (bridgeStatus === 404 && bridgeError?.code === "brand_not_found") {
-        logger.warn("Brand mapping missing in compatibility bridge; retrying without brand_id", {
-          storeId,
-          shopDomain,
-        });
-        legacy = await requestLegacyInstallUrl(req, {
-          shop: shopDomain,
-          api_key: apiKey,
-          api_secret: apiSecret,
-        });
-        legacySource = "shopify_oauth_compat_bridge_no_brand";
-      } else {
-        throw bridgeError;
-      }
-    }
+    // Update shopify_connections
+    await supabase.from("shopify_connections").upsert(
+      {
+        store_id: storeId,
+        shop_domain: shopDomain,
+        access_token_encrypted: "",
+        scopes,
+        status: "disconnected",
+        updated_at: nowIso(),
+      },
+      { onConflict: "store_id" },
+    );
 
-    if (!legacy?.installUrl) {
-      throw new Error("Legacy Shopify OAuth route did not return install URL");
-    }
-    if (!legacy.state) {
-      logger.warn("Proceeding with Shopify install URL without returned state token", { storeId, shopDomain });
-    }
+    // Build install URL
+    const backendUrl = resolveBackendUrl(req);
+    const redirectUri = `${backendUrl}/api/shopify/callback`;
+    const installUrl =
+      `https://${shopDomain}/admin/oauth/authorize?` +
+      `client_id=${encodeURIComponent(apiKey)}&` +
+      `scope=${encodeURIComponent(scopes)}&` +
+      `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+      `state=${encodeURIComponent(state)}`;
+
+    logger.info("Shopify OAuth flow started", { storeId, shopDomain, state });
 
     return res.status(201).json({
-      install_url: legacy.installUrl,
-      state: legacy.state,
+      install_url: installUrl,
+      state,
       shop: shopDomain,
-      source: legacySource,
     });
   } catch (error: any) {
     const status = Number(error?.status || 0);
